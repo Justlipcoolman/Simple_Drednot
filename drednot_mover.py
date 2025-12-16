@@ -1,5 +1,5 @@
 # drednot_mover.py
-# ALPINE VERSION: Single-Process Mode for Minimum RAM Usage
+# ALPINE VERSION: Single-Process, Low-Mem, Variable Fix
 
 import os
 import time
@@ -75,16 +75,18 @@ window.botInterval = setInterval(() => {
 }, 400);
 """
 
+# --- GLOBAL VAR ---
+driver = None
+
 # --- BROWSER SETUP ---
 def setup_driver():
     logging.info("Launching Alpine Chromium...")
     chrome_options = Options()
     
-    # --- ALPINE PATH ---
-    # Alpine installs it as 'chromium-browser', not 'chromium'
+    # Alpine path
     chrome_options.binary_location = "/usr/bin/chromium-browser"
     
-    # --- MEMORY SAVING FLAGS ---
+    # RAM Saving Flags
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--window-size=800,600")
     chrome_options.add_argument("--no-sandbox")
@@ -92,14 +94,12 @@ def setup_driver():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--mute-audio")
     
-    # --- AGGRESSIVE RAM SAVING ---
-    # 'Single Process' forces Chrome to use ONE process instead of many.
-    # This prevents it from eating all 512MB RAM.
+    # Aggressive Process Management
     chrome_options.add_argument("--single-process")
     chrome_options.add_argument("--no-zygote")
     chrome_options.add_argument("--renderer-process-limit=1")
     
-    # Block Images/Fonts
+    # Block Images/Notifications
     prefs = {
         "profile.managed_default_content_settings.images": 2,
         "profile.default_content_setting_values.notifications": 2,
@@ -144,7 +144,7 @@ def safe_click(d, element):
 def start_bot(use_key):
     global driver
     driver = setup_driver()
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 45) # Long timeout for slow Alpine
     
     try:
         logging.info(f"Navigating: {SHIP_INVITE_LINK}")
@@ -221,13 +221,16 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
     
+    # Initialize global driver variable here just in case
+    global driver
+    driver = None
+    
     while True:
         try:
             start_bot(use_key=True)
         except Exception:
             pass
         finally:
-            global driver
             if driver:
                 try: driver.quit()
                 except: pass
