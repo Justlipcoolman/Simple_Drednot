@@ -1,5 +1,5 @@
 # drednot_mover.py
-# Final Optimization: 30s Timeouts, Slow-Network Handling, Robust Login
+# ULTRA-LOW MEMORY VERSION (Fixes OOM Crash)
 
 import os
 import time
@@ -77,23 +77,36 @@ window.botInterval = setInterval(() => {
 
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching browser...")
+    logging.info("Launching Low-Mem Browser...")
     chrome_options = Options()
     chrome_options.binary_location = "/usr/bin/chromium"
     
+    # --- MEMORY SAVING FLAGS ---
     chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--window-size=1280,720")
+    chrome_options.add_argument("--window-size=800,600") # Small resolution
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--mute-audio")
-    chrome_options.add_argument("--renderer-process-limit=2")
+    
+    # Critical Memory Flags
+    chrome_options.add_argument("--disable-site-isolation-trials") # Huge RAM saver
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--renderer-process-limit=1") # Limit processes
     chrome_options.add_argument("--js-flags=--expose-gc")
+    
+    # Do not wait for full load
+    chrome_options.page_load_strategy = 'eager'
+
+    # Block Images
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    chrome_options.add_experimental_option("prefs", prefs)
     
     service = Service(executable_path="/usr/bin/chromedriver")
     d = webdriver.Chrome(service=service, options=chrome_options)
     
+    # Inject Hook
     d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": WASM_HOOK_SCRIPT
     })
@@ -117,11 +130,10 @@ def keep_alive():
         try: requests.get(url, timeout=5)
         except: pass
 
-# --- ACTIONS ---
 def safe_click(d, element):
     try:
         d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-        time.sleep(0.3)
+        time.sleep(0.5)
         element.click()
     except Exception:
         d.execute_script("arguments[0].click();", element)
@@ -129,14 +141,13 @@ def safe_click(d, element):
 def start_bot(use_key):
     global driver
     driver = setup_driver()
-    # INCREASED TIMEOUT TO 30s
-    wait = WebDriverWait(driver, 30) 
+    wait = WebDriverWait(driver, 30)
     
     try:
         logging.info(f"Navigating: {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
-        # 1. Clean Page (Ads)
+        # 1. Clean Page
         try:
             driver.execute_script("document.querySelectorAll('iframe, .ad-container').forEach(e => e.remove());")
         except: pass
@@ -146,15 +157,13 @@ def start_bot(use_key):
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         safe_click(driver, accept_btn)
         
-        # Give modal time to fade out so we don't click the wrong layer
-        time.sleep(2) 
+        time.sleep(3) # Wait for fade
         
         # 3. Login
         logged_in = False
         if use_key and ANONYMOUS_LOGIN_KEY:
             try:
                 logging.info("Attempting Key Login...")
-                
                 restore_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")))
                 safe_click(driver, restore_link)
                 
@@ -164,23 +173,18 @@ def start_bot(use_key):
                 inp.clear()
                 inp.send_keys(ANONYMOUS_LOGIN_KEY)
                 
-                # Critical: Force JS event to enable the button
+                # Enable Submit
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", inp)
                 time.sleep(1)
 
-                logging.info("Waiting for Submit button...")
-                # Wait for button to NOT be disabled
                 submit_xpath = "//div[contains(@class,'modal-window')]//button[contains(@class, 'btn-green') and text()='Submit']"
                 submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, submit_xpath)))
-                
-                # Ensure it doesn't have the disabled attribute
-                wait.until(lambda d: d.find_element(By.XPATH, submit_xpath).get_attribute("disabled") is None)
-                
                 safe_click(driver, submit_btn)
+                
                 logging.info("Key submitted.")
                 logged_in = True
             except Exception as e:
-                logging.warning(f"Key Login Failed ({e}). Switching to Guest.")
+                logging.warning(f"Login Failed ({e}). Guest Mode.")
                 driver.refresh()
                 time.sleep(3)
                 try:
@@ -195,10 +199,12 @@ def start_bot(use_key):
             
         # 4. Inject Movement
         logging.info("Injecting Movement Script...")
-        time.sleep(5) # Allow game world to init
+        # Inject immediately, then repeat
+        driver.execute_script(JS_MOVEMENT_SCRIPT)
+        time.sleep(5)
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         
-        logging.info("✅ Bot Active. Monitoring...")
+        logging.info("✅ Bot Active.")
         
         # 5. Passive Monitor
         while True:
@@ -210,7 +216,6 @@ def start_bot(use_key):
         logging.error(f"Crash: {e}")
         raise
 
-# --- MAIN ---
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
