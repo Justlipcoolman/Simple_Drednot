@@ -1,5 +1,5 @@
 # drednot_mover.py
-# OPTIMIZED: Infinite Run, V8 Memory Cap, aggressive DOM Cleaning.
+# STABLE VERSION: Debian Slim, Fixed Flags, Debug Logging
 
 import os
 import time
@@ -52,39 +52,7 @@ WASM_HOOK_SCRIPT = """
 })();
 """
 
-# --- 2. MEMORY SAVER / NO-RENDER SCRIPT ---
-# 1. Forces Canvas to 1x1 pixel.
-# 2. Deletes chat logs and UI elements every 5 seconds so text doesn't fill RAM.
-DISABLE_RENDERING_SCRIPT = """
-console.log("[Bot] Optimization Loop Running...");
-
-function optimizePage() {
-    // 1. Cripple Canvas (Stop GPU/CPU rendering)
-    const canvas = document.querySelector('canvas');
-    if (canvas) {
-        if (canvas.width !== 1) canvas.width = 1;
-        if (canvas.height !== 1) canvas.height = 1;
-        canvas.style.display = 'none'; // Hide completely
-    }
-    
-    // 2. DOM Cleaner (Remove heavy elements)
-    // Remove chat content so logs don't fill memory
-    const chat = document.getElementById('chat-content');
-    if (chat) chat.innerHTML = ''; 
-
-    // Remove backgrounds, stars, particles
-    const garbage = document.querySelectorAll('.background, .stars, .particle, .toast-container, iframe, .ad-container');
-    garbage.forEach(e => e.remove());
-}
-
-// Run immediately and repeatedly
-optimizePage();
-if (!window.optInterval) {
-    window.optInterval = setInterval(optimizePage, 5000);
-}
-"""
-
-# --- 3. MOVEMENT SCRIPT ---
+# --- 2. MOVEMENT SCRIPT ---
 JS_MOVEMENT_SCRIPT = """
 console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
@@ -113,40 +81,28 @@ driver = None
 
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching Optimized Browser...")
+    logging.info("Launching Stable Browser (Debian)...")
     try:
         chrome_options = Options()
         chrome_options.binary_location = "/usr/bin/chromium"
         
-        # --- HEADLESS & RESOLUTION ---
+        # --- STABILITY & RAM FLAGS ---
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--window-size=800,600")
-        
-        # --- CRITICAL MEMORY FLAGS ---
         chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        # Force JS Garbage Collection if heap > 128MB
-        chrome_options.add_argument("--js-flags=--max_old_space_size=128 --expose-gc")
-        # Disable various caches
-        chrome_options.add_argument("--disk-cache-size=1")
-        chrome_options.add_argument("--disable-application-cache")
-        
-        # --- DISABLE RENDERING PIPELINE ---
+        chrome_options.add_argument("--disable-dev-shm-usage") # Critical for Docker
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-software-rasterizer")
-        chrome_options.add_argument("--disable-gl-drawing-for-tests")
         chrome_options.add_argument("--mute-audio")
         
-        # Disable internal features
-        chrome_options.add_argument("--disable-extensions")
+        # SAFER RAM SAVING (Removed --single-process which caused crashes)
         chrome_options.add_argument("--disable-site-isolation-trials") 
         chrome_options.add_argument("--renderer-process-limit=2") 
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-application-cache")
         
-        # Block all visual content
+        # Block Images
         prefs = {
             "profile.managed_default_content_settings.images": 2,
-            "profile.managed_default_content_settings.stylesheets": 2,
-            "profile.managed_default_content_settings.fonts": 2,
             "profile.default_content_setting_values.notifications": 2,
         }
         chrome_options.add_experimental_option("prefs", prefs)
@@ -154,6 +110,7 @@ def setup_driver():
         service = Service(executable_path="/usr/bin/chromedriver")
         d = webdriver.Chrome(service=service, options=chrome_options)
         
+        # Inject Hook
         d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": WASM_HOOK_SCRIPT
         })
@@ -167,7 +124,7 @@ def setup_driver():
 flask_app = Flask('')
 @flask_app.route('/')
 def health_check():
-    return "Bot Running (Infinite Mode)"
+    return "Bot Running"
 
 def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
@@ -176,7 +133,7 @@ def keep_alive():
     url = RENDER_EXTERNAL_URL or f"http://localhost:{os.environ.get('PORT', 8080)}"
     logging.info(f"Monitor: {url}")
     while True:
-        time.sleep(60) # Ping every 1 minute
+        time.sleep(60)
         try: requests.get(url, timeout=5)
         except: pass
 
@@ -197,7 +154,6 @@ def start_bot(use_key):
         logging.info(f"Navigating: {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
-        # Initial cleanup
         try:
             driver.execute_script("document.querySelectorAll('iframe, .ad-container').forEach(e => e.remove());")
         except: pass
@@ -244,23 +200,20 @@ def start_bot(use_key):
             guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
             safe_click(driver, guest_btn)
             
-        logging.info("Injecting Movement + Memory Scripts...")
+        logging.info("Injecting Movement Script...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
-        time.sleep(2)
+        time.sleep(5)
+        driver.execute_script(JS_MOVEMENT_SCRIPT)
         
-        # Inject the heavy memory saver (clears DOM, resizes canvas)
-        driver.execute_script(DISABLE_RENDERING_SCRIPT)
+        logging.info("✅ Bot Active.")
         
-        logging.info("✅ Bot Active (Infinite Run).")
-        
-        # Infinite Loop
         while True:
             time.sleep(30)
             if not driver.service.is_connectable():
                 raise RuntimeError("Browser disconnected")
 
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Crash: {e}")
         raise
 
 def main():
@@ -274,7 +227,7 @@ def main():
         try:
             start_bot(use_key=True)
         except Exception:
-            logging.error("Restarting...")
+            logging.error("Main loop restart...")
             time.sleep(2)
         finally:
             if driver:
