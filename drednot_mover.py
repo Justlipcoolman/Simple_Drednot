@@ -1,5 +1,6 @@
 # drednot_mover.py
-# Final Fix: Ad-Blocker, Force-Click, JS-Loop Driven.
+# Optimization: "Trust Mode" - Assumes login success if buttons work.
+# Does NOT wait for Chat/Canvas to appear to avoid timeouts.
 
 import os
 import time
@@ -93,9 +94,8 @@ def setup_driver():
     chrome_options = Options()
     chrome_options.binary_location = "/usr/bin/chromium"
     
-    # Flags
     chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--window-size=1920,1080") # FIX: Prevent elements overlapping
+    chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -117,7 +117,7 @@ def setup_driver():
 flask_app = Flask('')
 @flask_app.route('/')
 def health_check():
-    return "Bot Status: Running (JS Loop Active)"
+    return "Bot Status: Running (Trust Mode)"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -131,6 +131,11 @@ def keep_alive_ping():
         try: requests.get(url, timeout=5)
         except: pass
 
+def safe_click(d, element):
+    d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    time.sleep(0.5)
+    d.execute_script("arguments[0].click();", element)
+
 # --- MAIN LOGIC ---
 def start_bot(use_key_login):
     global driver
@@ -139,57 +144,66 @@ def start_bot(use_key_login):
     try:
         logging.info(f"Navigating to {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 15)
         
-        # --- FIX: REMOVE ADS ---
+        # Remove Ads
         try:
-            driver.execute_script("""
-                const ads = document.querySelectorAll('a[href*="advertising"], .ad-container, iframe');
-                ads.forEach(el => el.remove());
-            """)
+            driver.execute_script("const ads = document.querySelectorAll('a[href*=\"advertising\"], .ad-container, iframe'); ads.forEach(el => el.remove());")
         except: pass
 
-        # 1. Accept Invite (FORCE CLICK)
+        # 1. Accept Invite
+        logging.info("Step 1: Accepting Invite...")
         join_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".modal-container .btn-green")))
-        # Use JS click to bypass "Element Click Intercepted"
-        driver.execute_script("arguments[0].click();", join_btn)
+        safe_click(driver, join_btn)
         
-        # 2. Login Logic
+        # 2. Login Sequence
+        # We assume if these clicks work, we are logged in.
+        # We do NOT wait for the game to load afterwards.
         if ANONYMOUS_LOGIN_KEY and use_key_login:
-            logging.info("Logging in with Key...")
-            link = wait.until(EC.presence_of_element_located((By.XPATH, "//a[contains(., 'Restore old anonymous key')]")))
-            driver.execute_script("arguments[0].click();", link) # Force click link
-            
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]'))).send_keys(ANONYMOUS_LOGIN_KEY)
-            
-            submit = driver.find_element(By.XPATH, "//div[.//h2[text()='Restore Account Key']]//button[contains(@class, 'btn-green')]")
-            driver.execute_script("arguments[0].click();", submit) # Force click submit
+            try:
+                logging.info("Step 2: Clicking 'Restore Key'...")
+                short_wait = WebDriverWait(driver, 5)
+                link = short_wait.until(EC.presence_of_element_located((By.XPATH, "//a[contains(., 'Restore old anonymous key')]")))
+                safe_click(driver, link)
+                
+                logging.info("Step 3: Entering Key...")
+                inp = short_wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]')))
+                inp.clear()
+                inp.send_keys(ANONYMOUS_LOGIN_KEY)
+                
+                logging.info("Step 4: Submitting Key...")
+                submit = driver.find_element(By.XPATH, "//div[.//h2[text()='Restore Account Key']]//button[contains(@class, 'btn-green')]")
+                safe_click(driver, submit)
+                
+                logging.info("Login sequence completed.")
+            except Exception as e:
+                logging.warning(f"Login click failed ({e}). Attempting Guest fallback...")
+                driver.refresh()
+                time.sleep(3)
+                try:
+                    join_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".modal-container .btn-green")))
+                    safe_click(driver, join_btn)
+                except: pass
+                play_btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
+                safe_click(driver, play_btn)
 
-            wait.until(EC.any_of(EC.presence_of_element_located((By.ID, "chat-input")), EC.presence_of_element_located((By.XPATH, "//h2[text()='Login Failed']"))))
-            if driver.find_elements(By.XPATH, "//h2[text()='Login Failed']"):
-                raise ValueError("Invalid Key")
-        else:
-            logging.info("Logging in as Guest...")
-            play_btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
-            driver.execute_script("arguments[0].click();", play_btn) # Force click play
-
-        # 3. Wait for Game Load
-        wait.until(EC.presence_of_element_located((By.ID, "chat-input")))
-        logging.info("✅ Game Loaded.")
-
-        # 4. Inject Movement
-        logging.info("Injecting JS Movement Script...")
+        # 3. Fire and Forget
+        logging.info("Step 5: Injecting Movement Script (Blind Injection)...")
+        time.sleep(5) # Give the game 5 seconds to process the login
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         
-        logging.info("Bot active. Python sleeping.")
+        logging.info("✅ Bot is running. (Monitoring for crashes only)")
         
+        # 4. Passive Monitor
         while True:
-            time.sleep(10)
+            time.sleep(20)
             if not driver.service.is_connectable():
                 raise RuntimeError("Browser died")
+            # We do NOT check for chat/canvas anymore. 
+            # If the login sequence finished, we assume we are in.
 
     except Exception as e:
-        logging.error(f"Session Error: {e}")
+        logging.error(f"Critical Setup Error: {e}")
         raise
 
 def main():
@@ -201,9 +215,8 @@ def main():
     while True:
         try:
             start_bot(use_key)
-        except ValueError:
-            use_key = False
         except Exception:
+            logging.warning("Bot crash. Restarting in 5s...")
             pass
         finally:
             global driver
