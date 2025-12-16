@@ -1,7 +1,8 @@
-# drednot_mover.py
-# STABLE VERSION: Debian Slim, Fixed Flags, Debug Logging
-
 import os
+
+# OPTIMIZATION 1: Reduce Python Memory Fragmentation immediately
+os.environ['MALLOC_ARENA_MAX'] = '2'
+
 import time
 import logging
 import threading
@@ -81,35 +82,55 @@ driver = None
 
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching Stable Browser (Debian)...")
+    logging.info("Launching Low-RAM Browser...")
     try:
         chrome_options = Options()
         chrome_options.binary_location = "/usr/bin/chromium"
         
-        # --- STABILITY & RAM FLAGS ---
+        # --- ESSENTIAL HEADLESS FLAGS ---
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--window-size=800,600")
         chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage") # Critical for Docker
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        
+        # --- OPTIMIZATION 2: Aggressive Resource Saving ---
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--mute-audio")
-        
-        # SAFER RAM SAVING (Removed --single-process which caused crashes)
-        chrome_options.add_argument("--disable-site-isolation-trials") 
-        chrome_options.add_argument("--renderer-process-limit=2") 
+        chrome_options.add_argument("--disable-software-rasterizer") # Don't emulate GPU in CPU
         chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-application-cache")
+        chrome_options.add_argument("--disable-infobars")
+        chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument("--disable-popup-blocking")
         
-        # Block Images
-        prefs = {
-            "profile.managed_default_content_settings.images": 2,
-            "profile.default_content_setting_values.notifications": 2,
-        }
-        chrome_options.add_experimental_option("prefs", prefs)
+        # Limit JS Memory (Forces Garbage Collection sooner)
+        chrome_options.add_argument("--js-flags=--max_old_space_size=256")
         
+        # Reduce OS Overhead
+        chrome_options.add_argument("--dbus-stub")
+        chrome_options.add_argument("--disable-gl-drawing-for-tests")
+        
+        # Process Limiting (Prevent opening too many sub-processes)
+        chrome_options.add_argument("--renderer-process-limit=2")
+        chrome_options.add_argument("--disable-site-isolation-trials")
+        
+        # OPTIMIZATION 3: Load Strategy (Don't wait for heavy ads to finish loading)
+        chrome_options.page_load_strategy = 'eager'
+
         service = Service(executable_path="/usr/bin/chromedriver")
         d = webdriver.Chrome(service=service, options=chrome_options)
         
+        # --- OPTIMIZATION 4: Network Layer Blocking (CDP) ---
+        # This prevents the browser from even downloading images/media/fonts
+        d.execute_cdp_cmd('Network.setBlockedURLs', {
+            "urls": [
+                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg", 
+                "*.mp3", "*.wav", "*.ogg", 
+                "*.woff", "*.woff2", "*.ttf", # Fonts are heavy
+                "*google-analytics*", "*doubleclick*", "*adservice*", 
+                "*intercom*", "*facebook*", "*twitter*"
+            ]
+        })
+        d.execute_cdp_cmd('Network.enable', {})
+
         # Inject Hook
         d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": WASM_HOOK_SCRIPT
@@ -154,8 +175,9 @@ def start_bot(use_key):
         logging.info(f"Navigating: {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
+        # Cleanup DOM manually just in case
         try:
-            driver.execute_script("document.querySelectorAll('iframe, .ad-container').forEach(e => e.remove());")
+            driver.execute_script("document.querySelectorAll('iframe, .ad-container, video, audio').forEach(e => e.remove());")
         except: pass
 
         logging.info("Accepting Invite...")
@@ -202,15 +224,22 @@ def start_bot(use_key):
             
         logging.info("Injecting Movement Script...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
-        time.sleep(5)
-        driver.execute_script(JS_MOVEMENT_SCRIPT)
         
+        # Periodic cleanup loop
         logging.info("✅ Bot Active.")
         
+        last_check = time.time()
         while True:
-            time.sleep(30)
+            time.sleep(10)
+            
+            # Crash check
             if not driver.service.is_connectable():
                 raise RuntimeError("Browser disconnected")
+            
+            # Re-inject movement occasionally
+            if time.time() - last_check > 60:
+                 driver.execute_script(JS_MOVEMENT_SCRIPT)
+                 last_check = time.time()
 
     except Exception as e:
         logging.error(f"Crash: {e}")
@@ -228,13 +257,16 @@ def main():
             start_bot(use_key=True)
         except Exception:
             logging.error("Main loop restart...")
-            time.sleep(2)
+            time.sleep(5)
         finally:
             if driver:
-                try: driver.quit()
+                try: 
+                    # Aggressive cleanup
+                    driver.execute_cdp_cmd('Browser.close', {})
+                    driver.quit() 
                 except: pass
             driver = None
-            gc.collect()
+            gc.collect() # Force Python GC
             time.sleep(5)
 
 if __name__ == "__main__":
