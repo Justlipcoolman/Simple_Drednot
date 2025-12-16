@@ -1,5 +1,5 @@
 # drednot_mover.py
-# ULTRA-LOW MEMORY VERSION (Fixes OOM Crash)
+# ALPINE VERSION: Single-Process Mode for Minimum RAM Usage
 
 import os
 import time
@@ -77,30 +77,33 @@ window.botInterval = setInterval(() => {
 
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching Low-Mem Browser...")
+    logging.info("Launching Alpine Chromium...")
     chrome_options = Options()
-    chrome_options.binary_location = "/usr/bin/chromium"
+    
+    # --- ALPINE PATH ---
+    # Alpine installs it as 'chromium-browser', not 'chromium'
+    chrome_options.binary_location = "/usr/bin/chromium-browser"
     
     # --- MEMORY SAVING FLAGS ---
     chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--window-size=800,600") # Small resolution
+    chrome_options.add_argument("--window-size=800,600")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--mute-audio")
     
-    # Critical Memory Flags
-    chrome_options.add_argument("--disable-site-isolation-trials") # Huge RAM saver
-    chrome_options.add_argument("--disable-software-rasterizer")
-    chrome_options.add_argument("--renderer-process-limit=1") # Limit processes
-    chrome_options.add_argument("--js-flags=--expose-gc")
+    # --- AGGRESSIVE RAM SAVING ---
+    # 'Single Process' forces Chrome to use ONE process instead of many.
+    # This prevents it from eating all 512MB RAM.
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--no-zygote")
+    chrome_options.add_argument("--renderer-process-limit=1")
     
-    # Do not wait for full load
-    chrome_options.page_load_strategy = 'eager'
-
-    # Block Images
-    prefs = {"profile.managed_default_content_settings.images": 2}
+    # Block Images/Fonts
+    prefs = {
+        "profile.managed_default_content_settings.images": 2,
+        "profile.default_content_setting_values.notifications": 2,
+    }
     chrome_options.add_experimental_option("prefs", prefs)
     
     service = Service(executable_path="/usr/bin/chromedriver")
@@ -117,7 +120,7 @@ def setup_driver():
 flask_app = Flask('')
 @flask_app.route('/')
 def health_check():
-    return "Bot Running"
+    return "Alpine Bot Running"
 
 def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
@@ -157,7 +160,7 @@ def start_bot(use_key):
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         safe_click(driver, accept_btn)
         
-        time.sleep(3) # Wait for fade
+        time.sleep(3) 
         
         # 3. Login
         logged_in = False
@@ -173,7 +176,6 @@ def start_bot(use_key):
                 inp.clear()
                 inp.send_keys(ANONYMOUS_LOGIN_KEY)
                 
-                # Enable Submit
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", inp)
                 time.sleep(1)
 
@@ -199,7 +201,6 @@ def start_bot(use_key):
             
         # 4. Inject Movement
         logging.info("Injecting Movement Script...")
-        # Inject immediately, then repeat
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         time.sleep(5)
         driver.execute_script(JS_MOVEMENT_SCRIPT)

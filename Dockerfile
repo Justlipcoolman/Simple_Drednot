@@ -1,23 +1,26 @@
-FROM python:3.11-slim
+# Use Alpine Linux (Tiny OS) to save RAM
+FROM python:3.11-alpine
 
 WORKDIR /app
 
-# Install chromium, driver, and dumb-init
-# rm -rf cleans cache to reduce image size
-RUN apt-get update && apt-get install -y \
+# Install Chromium and dependencies on Alpine
+# Alpine's chromium package is highly optimized
+RUN apk add --no-cache \
     chromium \
-    chromium-driver \
+    chromium-chromedriver \
     dumb-init \
-    --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+    libstdc++
 
+# Copy requirements
 COPY requirements.txt .
 
+# Install python deps
+# We don't need compilation tools for these specific packages
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# dumb-init prevents zombie processes
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+# Use dumb-init to handle signals
+ENTRYPOINT ["dumb-init", "--"]
 
 CMD ["python", "drednot_mover.py"]
