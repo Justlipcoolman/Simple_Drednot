@@ -1,6 +1,5 @@
 # drednot_mover.py
-# Optimization: "Trust Mode" - Assumes login success if buttons work.
-# Does NOT wait for Chat/Canvas to appear to avoid timeouts.
+# Final Version: Updated for specific HTML elements (Accept/Restore/Submit)
 
 import os
 import time
@@ -8,8 +7,6 @@ import logging
 import threading
 import gc
 import requests
-from threading import Lock
-
 from flask import Flask
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -19,83 +16,83 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # --- CONFIGURATION ---
-SHIP_INVITE_LINK = 'https://drednot.io/invite/mXC0XdWitXkiIgE2uzN7sRTO'
+SHIP_INVITE_LINK = 'https://drednot.io/invite/mXC0XdWitXkiIgE2uzN7sRTO' 
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT' 
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 
-# --- 1. WASM BYPASS ---
+# --- 1. WASM HOOK ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
-    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    const originalInstantiate = win.WebAssembly.instantiate;
-    const originalInstantiateStreaming = win.WebAssembly.instantiateStreaming;
+    try {
+        const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        const originalInstantiate = win.WebAssembly.instantiate;
+        const originalInstantiateStreaming = win.WebAssembly.instantiateStreaming;
 
-    function patchImports(importObject) {
-        if (!importObject || !importObject.wbg) return;
-        Object.keys(importObject.wbg).forEach(key => {
-            if (key.includes('isTrusted')) {
-                importObject.wbg[key] = function() { return 1; };
-            }
-        });
-    }
+        function patchImports(importObject) {
+            if (!importObject || !importObject.wbg) return;
+            Object.keys(importObject.wbg).forEach(key => {
+                if (key.includes('isTrusted')) {
+                    importObject.wbg[key] = function() { return 1; };
+                }
+            });
+        }
 
-    win.WebAssembly.instantiate = function(bufferSource, importObject) {
-        if (importObject) patchImports(importObject);
-        return originalInstantiate.apply(this, arguments);
-    };
+        win.WebAssembly.instantiate = function(bufferSource, importObject) {
+            if (importObject) patchImports(importObject);
+            return originalInstantiate.apply(this, arguments);
+        };
 
-    win.WebAssembly.instantiateStreaming = function(source, importObject) {
-        if (importObject) patchImports(importObject);
-        return originalInstantiateStreaming.apply(this, arguments);
-    };
+        win.WebAssembly.instantiateStreaming = function(source, importObject) {
+            if (importObject) patchImports(importObject);
+            return originalInstantiateStreaming.apply(this, arguments);
+        };
+    } catch (e) { console.error("WASM Hook Error:", e); }
 })();
 """
 
-# --- 2. MOVEMENT LOOP ---
+# --- 2. MOVEMENT SCRIPT ---
 JS_MOVEMENT_SCRIPT = """
-console.log("[Bot] Injecting high-performance movement loop...");
+console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
 
 function press(key, type) {
-  document.dispatchEvent(
-    new KeyboardEvent(type, {
-      key: key,
-      code: 'Key' + key.toUpperCase(),
-      bubbles: true,
-      cancelable: true,
-      view: window
-    })
-  );
+    const eventObj = {
+        key: key,
+        code: 'Key' + key.toUpperCase(),
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        repeat: type === 'keydown'
+    };
+    document.dispatchEvent(new KeyboardEvent(type, eventObj));
+    window.dispatchEvent(new KeyboardEvent(type, eventObj));
 }
 
 if (window.botInterval) clearInterval(window.botInterval);
 
 window.botInterval = setInterval(() => {
-  if (!toggle) return;
-  press('a', 'keydown');
-  setTimeout(() => press('a', 'keyup'), 100);
-  setTimeout(() => {
-    press('d', 'keydown');
-    setTimeout(() => press('d', 'keyup'), 100);
-  }, 200);
+    if (!toggle) return;
+    press('a', 'keydown');
+    setTimeout(() => press('a', 'keyup'), 100);
+    setTimeout(() => {
+        press('d', 'keydown');
+        setTimeout(() => press('d', 'keyup'), 100);
+    }, 200);
 }, 400);
 """
 
-# --- GLOBAL STATE ---
-driver = None
-
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching optimized headless browser...")
+    logging.info("Launching browser...")
     chrome_options = Options()
     chrome_options.binary_location = "/usr/bin/chromium"
     
     chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--window-size=1280,720")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -117,13 +114,12 @@ def setup_driver():
 flask_app = Flask('')
 @flask_app.route('/')
 def health_check():
-    return "Bot Status: Running (Trust Mode)"
+    return "Bot Running"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host='0.0.0.0', port=port)
+    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
-def keep_alive_ping():
+def keep_alive():
     url = RENDER_EXTERNAL_URL or f"http://localhost:{os.environ.get('PORT', 8080)}"
     logging.info(f"Monitor: {url}")
     while True:
@@ -131,92 +127,104 @@ def keep_alive_ping():
         try: requests.get(url, timeout=5)
         except: pass
 
+# --- ACTIONS ---
 def safe_click(d, element):
-    d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-    time.sleep(0.5)
-    d.execute_script("arguments[0].click();", element)
+    try:
+        d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+        time.sleep(0.2)
+        element.click()
+    except Exception:
+        d.execute_script("arguments[0].click();", element)
 
-# --- MAIN LOGIC ---
-def start_bot(use_key_login):
+def start_bot(use_key):
     global driver
     driver = setup_driver()
+    wait = WebDriverWait(driver, 15)
     
     try:
-        logging.info(f"Navigating to {SHIP_INVITE_LINK}")
+        logging.info(f"Navigating: {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
-        wait = WebDriverWait(driver, 15)
         
-        # Remove Ads
+        # 1. Clean Page (Ads)
         try:
-            driver.execute_script("const ads = document.querySelectorAll('a[href*=\"advertising\"], .ad-container, iframe'); ads.forEach(el => el.remove());")
+            driver.execute_script("document.querySelectorAll('iframe, .ad-container').forEach(e => e.remove());")
         except: pass
 
-        # 1. Accept Invite
-        logging.info("Step 1: Accepting Invite...")
-        join_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".modal-container .btn-green")))
-        safe_click(driver, join_btn)
+        # 2. Accept Invite
+        # Targeting: <button class="btn-green btn-large">Accept</button>
+        logging.info("Accepting Invite...")
+        accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
+        safe_click(driver, accept_btn)
         
-        # 2. Login Sequence
-        # We assume if these clicks work, we are logged in.
-        # We do NOT wait for the game to load afterwards.
-        if ANONYMOUS_LOGIN_KEY and use_key_login:
+        # 3. Login
+        logged_in = False
+        if use_key and ANONYMOUS_LOGIN_KEY:
             try:
-                logging.info("Step 2: Clicking 'Restore Key'...")
-                short_wait = WebDriverWait(driver, 5)
-                link = short_wait.until(EC.presence_of_element_located((By.XPATH, "//a[contains(., 'Restore old anonymous key')]")))
-                safe_click(driver, link)
+                logging.info("Attempting Key Login...")
                 
-                logging.info("Step 3: Entering Key...")
-                inp = short_wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]')))
+                # Targeting: <a href="javascript:void;">Restore old anonymous key</a>
+                restore_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")))
+                safe_click(driver, restore_link)
+                
+                # Targeting: <input maxlength="24"> inside the modal
+                inp = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]')))
                 inp.clear()
                 inp.send_keys(ANONYMOUS_LOGIN_KEY)
                 
-                logging.info("Step 4: Submitting Key...")
-                submit = driver.find_element(By.XPATH, "//div[.//h2[text()='Restore Account Key']]//button[contains(@class, 'btn-green')]")
-                safe_click(driver, submit)
+                # Force input event to ensure 'disabled' attribute is removed
+                driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", inp)
+                time.sleep(0.5)
+
+                # Targeting: <button class="btn-green">Submit</button> inside the modal
+                # We wait specifically for the 'disabled' attribute to disappear
+                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'modal-window')]//button[contains(@class, 'btn-green') and text()='Submit']")))
+                safe_click(driver, submit_btn)
                 
-                logging.info("Login sequence completed.")
+                logging.info("Key submitted.")
+                logged_in = True
             except Exception as e:
-                logging.warning(f"Login click failed ({e}). Attempting Guest fallback...")
+                logging.warning(f"Key Login Failed: {e}")
+                # Reload to clear modals
                 driver.refresh()
                 time.sleep(3)
+                # Re-click accept if we refreshed
                 try:
-                    join_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".modal-container .btn-green")))
-                    safe_click(driver, join_btn)
+                    accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
+                    safe_click(driver, accept_btn)
                 except: pass
-                play_btn = wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
-                safe_click(driver, play_btn)
-
-        # 3. Fire and Forget
-        logging.info("Step 5: Injecting Movement Script (Blind Injection)...")
-        time.sleep(5) # Give the game 5 seconds to process the login
+        
+        if not logged_in:
+            logging.info("Falling back to Guest Mode...")
+            guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
+            safe_click(driver, guest_btn)
+            
+        # 4. Inject Movement
+        logging.info("Injecting Movement Script...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
+        time.sleep(5)
+        driver.execute_script(JS_MOVEMENT_SCRIPT) # Double inject
         
-        logging.info("✅ Bot is running. (Monitoring for crashes only)")
+        logging.info("✅ Bot Active. Monitoring...")
         
-        # 4. Passive Monitor
+        # 5. Passive Monitor
         while True:
-            time.sleep(20)
+            time.sleep(30)
             if not driver.service.is_connectable():
-                raise RuntimeError("Browser died")
-            # We do NOT check for chat/canvas anymore. 
-            # If the login sequence finished, we assume we are in.
+                raise RuntimeError("Browser disconnected")
 
     except Exception as e:
-        logging.error(f"Critical Setup Error: {e}")
+        logging.error(f"Crash: {e}")
         raise
 
+# --- MAIN ---
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    threading.Thread(target=keep_alive_ping, daemon=True).start()
-    
-    use_key = True
+    threading.Thread(target=keep_alive, daemon=True).start()
     
     while True:
         try:
-            start_bot(use_key)
+            start_bot(use_key=True)
         except Exception:
-            logging.warning("Bot crash. Restarting in 5s...")
             pass
         finally:
             global driver
