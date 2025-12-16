@@ -1,5 +1,5 @@
 # drednot_mover.py
-# Final Version: Updated for specific HTML elements (Accept/Restore/Submit)
+# Final Optimization: 30s Timeouts, Slow-Network Handling, Robust Login
 
 import os
 import time
@@ -29,9 +29,6 @@ WASM_HOOK_SCRIPT = """
     'use strict';
     try {
         const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-        const originalInstantiate = win.WebAssembly.instantiate;
-        const originalInstantiateStreaming = win.WebAssembly.instantiateStreaming;
-
         function patchImports(importObject) {
             if (!importObject || !importObject.wbg) return;
             Object.keys(importObject.wbg).forEach(key => {
@@ -40,17 +37,17 @@ WASM_HOOK_SCRIPT = """
                 }
             });
         }
-
+        const originalInstantiate = win.WebAssembly.instantiate;
         win.WebAssembly.instantiate = function(bufferSource, importObject) {
             if (importObject) patchImports(importObject);
             return originalInstantiate.apply(this, arguments);
         };
-
+        const originalInstantiateStreaming = win.WebAssembly.instantiateStreaming;
         win.WebAssembly.instantiateStreaming = function(source, importObject) {
             if (importObject) patchImports(importObject);
             return originalInstantiateStreaming.apply(this, arguments);
         };
-    } catch (e) { console.error("WASM Hook Error:", e); }
+    } catch (e) {}
 })();
 """
 
@@ -58,22 +55,15 @@ WASM_HOOK_SCRIPT = """
 JS_MOVEMENT_SCRIPT = """
 console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
-
 function press(key, type) {
     const eventObj = {
-        key: key,
-        code: 'Key' + key.toUpperCase(),
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        repeat: type === 'keydown'
+        key: key, code: 'Key' + key.toUpperCase(),
+        bubbles: true, cancelable: true, view: window, repeat: type === 'keydown'
     };
     document.dispatchEvent(new KeyboardEvent(type, eventObj));
     window.dispatchEvent(new KeyboardEvent(type, eventObj));
 }
-
 if (window.botInterval) clearInterval(window.botInterval);
-
 window.botInterval = setInterval(() => {
     if (!toggle) return;
     press('a', 'keydown');
@@ -131,7 +121,7 @@ def keep_alive():
 def safe_click(d, element):
     try:
         d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-        time.sleep(0.2)
+        time.sleep(0.3)
         element.click()
     except Exception:
         d.execute_script("arguments[0].click();", element)
@@ -139,7 +129,8 @@ def safe_click(d, element):
 def start_bot(use_key):
     global driver
     driver = setup_driver()
-    wait = WebDriverWait(driver, 15)
+    # INCREASED TIMEOUT TO 30s
+    wait = WebDriverWait(driver, 30) 
     
     try:
         logging.info(f"Navigating: {SHIP_INVITE_LINK}")
@@ -151,10 +142,12 @@ def start_bot(use_key):
         except: pass
 
         # 2. Accept Invite
-        # Targeting: <button class="btn-green btn-large">Accept</button>
         logging.info("Accepting Invite...")
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         safe_click(driver, accept_btn)
+        
+        # Give modal time to fade out so we don't click the wrong layer
+        time.sleep(2) 
         
         # 3. Login
         logged_in = False
@@ -162,47 +155,48 @@ def start_bot(use_key):
             try:
                 logging.info("Attempting Key Login...")
                 
-                # Targeting: <a href="javascript:void;">Restore old anonymous key</a>
                 restore_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")))
                 safe_click(driver, restore_link)
                 
-                # Targeting: <input maxlength="24"> inside the modal
+                logging.info("Entering Key...")
                 inp = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]')))
+                inp.click()
                 inp.clear()
                 inp.send_keys(ANONYMOUS_LOGIN_KEY)
                 
-                # Force input event to ensure 'disabled' attribute is removed
+                # Critical: Force JS event to enable the button
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", inp)
-                time.sleep(0.5)
+                time.sleep(1)
 
-                # Targeting: <button class="btn-green">Submit</button> inside the modal
-                # We wait specifically for the 'disabled' attribute to disappear
-                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'modal-window')]//button[contains(@class, 'btn-green') and text()='Submit']")))
-                safe_click(driver, submit_btn)
+                logging.info("Waiting for Submit button...")
+                # Wait for button to NOT be disabled
+                submit_xpath = "//div[contains(@class,'modal-window')]//button[contains(@class, 'btn-green') and text()='Submit']"
+                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, submit_xpath)))
                 
+                # Ensure it doesn't have the disabled attribute
+                wait.until(lambda d: d.find_element(By.XPATH, submit_xpath).get_attribute("disabled") is None)
+                
+                safe_click(driver, submit_btn)
                 logging.info("Key submitted.")
                 logged_in = True
             except Exception as e:
-                logging.warning(f"Key Login Failed: {e}")
-                # Reload to clear modals
+                logging.warning(f"Key Login Failed ({e}). Switching to Guest.")
                 driver.refresh()
                 time.sleep(3)
-                # Re-click accept if we refreshed
                 try:
                     accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
                     safe_click(driver, accept_btn)
                 except: pass
         
         if not logged_in:
-            logging.info("Falling back to Guest Mode...")
+            logging.info("Playing as Guest...")
             guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
             safe_click(driver, guest_btn)
             
         # 4. Inject Movement
         logging.info("Injecting Movement Script...")
+        time.sleep(5) # Allow game world to init
         driver.execute_script(JS_MOVEMENT_SCRIPT)
-        time.sleep(5)
-        driver.execute_script(JS_MOVEMENT_SCRIPT) # Double inject
         
         logging.info("✅ Bot Active. Monitoring...")
         
