@@ -17,7 +17,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # --- CONFIGURATION ---
-SHIP_INVITE_LINK = 'https://drednot.io/invite/mXC0XdWitXkiIgE2uzN7sRTO' 
+SHIP_INVITE_LINK = 'https://drednot.io/invite/-EKifhVqXiiFGvEx9JvGnC9H' 
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT' 
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
@@ -133,7 +133,7 @@ def keep_alive():
     url = RENDER_EXTERNAL_URL or f"http://localhost:{os.environ.get('PORT', 8080)}"
     logging.info(f"Monitor: {url}")
     while True:
-        time.sleep(600)
+        time.sleep(60)
         try: requests.get(url, timeout=5)
         except: pass
 
