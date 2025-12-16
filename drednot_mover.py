@@ -1,5 +1,5 @@
 # drednot_mover.py
-# FAST BUILD VERSION: Debian Slim + Single Process Chrome
+# STABLE VERSION: Debian Slim, Fixed Flags, Debug Logging
 
 import os
 import time
@@ -7,6 +7,7 @@ import logging
 import threading
 import gc
 import requests
+import traceback
 from flask import Flask
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -80,42 +81,44 @@ driver = None
 
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching Low-Mem Browser (Debian)...")
-    chrome_options = Options()
-    
-    # --- DEBIAN PATH ---
-    chrome_options.binary_location = "/usr/bin/chromium"
-    
-    # --- MEMORY SAVING FLAGS ---
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--window-size=800,600")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--mute-audio")
-    
-    # --- CRITICAL RAM SAVERS (Single Process) ---
-    # This prevents Chrome from spawning 10+ processes
-    chrome_options.add_argument("--single-process") 
-    chrome_options.add_argument("--no-zygote")
-    chrome_options.add_argument("--renderer-process-limit=1")
-    
-    # Block Images to save RAM
-    prefs = {
-        "profile.managed_default_content_settings.images": 2,
-        "profile.default_content_setting_values.notifications": 2,
-    }
-    chrome_options.add_experimental_option("prefs", prefs)
-    
-    service = Service(executable_path="/usr/bin/chromedriver")
-    d = webdriver.Chrome(service=service, options=chrome_options)
-    
-    # Inject Hook
-    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": WASM_HOOK_SCRIPT
-    })
-    
-    return d
+    logging.info("Launching Stable Browser (Debian)...")
+    try:
+        chrome_options = Options()
+        chrome_options.binary_location = "/usr/bin/chromium"
+        
+        # --- STABILITY & RAM FLAGS ---
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--window-size=800,600")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage") # Critical for Docker
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--mute-audio")
+        
+        # SAFER RAM SAVING (Removed --single-process which caused crashes)
+        chrome_options.add_argument("--disable-site-isolation-trials") 
+        chrome_options.add_argument("--renderer-process-limit=2") 
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--disable-application-cache")
+        
+        # Block Images
+        prefs = {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.default_content_setting_values.notifications": 2,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+        
+        service = Service(executable_path="/usr/bin/chromedriver")
+        d = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # Inject Hook
+        d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": WASM_HOOK_SCRIPT
+        })
+        return d
+    except Exception as e:
+        logging.error("FAILED TO START BROWSER:")
+        logging.error(traceback.format_exc())
+        raise e
 
 # --- FLASK ---
 flask_app = Flask('')
@@ -224,7 +227,8 @@ def main():
         try:
             start_bot(use_key=True)
         except Exception:
-            pass
+            logging.error("Main loop restart...")
+            time.sleep(2)
         finally:
             if driver:
                 try: driver.quit()
