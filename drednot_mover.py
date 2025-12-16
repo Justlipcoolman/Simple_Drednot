@@ -1,5 +1,5 @@
 # drednot_mover.py
-# ALPINE VERSION: Single-Process, Low-Mem, Variable Fix
+# FAST BUILD VERSION: Debian Slim + Single Process Chrome
 
 import os
 import time
@@ -80,13 +80,13 @@ driver = None
 
 # --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching Alpine Chromium...")
+    logging.info("Launching Low-Mem Browser (Debian)...")
     chrome_options = Options()
     
-    # Alpine path
-    chrome_options.binary_location = "/usr/bin/chromium-browser"
+    # --- DEBIAN PATH ---
+    chrome_options.binary_location = "/usr/bin/chromium"
     
-    # RAM Saving Flags
+    # --- MEMORY SAVING FLAGS ---
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--window-size=800,600")
     chrome_options.add_argument("--no-sandbox")
@@ -94,12 +94,13 @@ def setup_driver():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--mute-audio")
     
-    # Aggressive Process Management
-    chrome_options.add_argument("--single-process")
+    # --- CRITICAL RAM SAVERS (Single Process) ---
+    # This prevents Chrome from spawning 10+ processes
+    chrome_options.add_argument("--single-process") 
     chrome_options.add_argument("--no-zygote")
     chrome_options.add_argument("--renderer-process-limit=1")
     
-    # Block Images/Notifications
+    # Block Images to save RAM
     prefs = {
         "profile.managed_default_content_settings.images": 2,
         "profile.default_content_setting_values.notifications": 2,
@@ -120,7 +121,7 @@ def setup_driver():
 flask_app = Flask('')
 @flask_app.route('/')
 def health_check():
-    return "Alpine Bot Running"
+    return "Bot Running"
 
 def run_flask():
     flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
@@ -144,25 +145,22 @@ def safe_click(d, element):
 def start_bot(use_key):
     global driver
     driver = setup_driver()
-    wait = WebDriverWait(driver, 45) # Long timeout for slow Alpine
+    wait = WebDriverWait(driver, 40)
     
     try:
         logging.info(f"Navigating: {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
-        # 1. Clean Page
         try:
             driver.execute_script("document.querySelectorAll('iframe, .ad-container').forEach(e => e.remove());")
         except: pass
 
-        # 2. Accept Invite
         logging.info("Accepting Invite...")
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         safe_click(driver, accept_btn)
         
         time.sleep(3) 
         
-        # 3. Login
         logged_in = False
         if use_key and ANONYMOUS_LOGIN_KEY:
             try:
@@ -199,7 +197,6 @@ def start_bot(use_key):
             guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
             safe_click(driver, guest_btn)
             
-        # 4. Inject Movement
         logging.info("Injecting Movement Script...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         time.sleep(5)
@@ -207,7 +204,6 @@ def start_bot(use_key):
         
         logging.info("✅ Bot Active.")
         
-        # 5. Passive Monitor
         while True:
             time.sleep(30)
             if not driver.service.is_connectable():
@@ -221,7 +217,6 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
     
-    # Initialize global driver variable here just in case
     global driver
     driver = None
     
