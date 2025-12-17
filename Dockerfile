@@ -1,26 +1,19 @@
-# Use minimal Python on Debian Bullseye
-FROM python:3.9-slim-bullseye
-
-# No cache to keep image small
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-# Install Chromium and Driver manually
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
-    chromium-driver \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install Python deps
+# Install chromium and deps
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    dumb-init \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY drednot_mover.py .
+COPY . .
 
-# Healthcheck for Render
-HEALTHCHECK CMD curl --fail http://localhost:8080/ || exit 1
-
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["python", "drednot_mover.py"]
