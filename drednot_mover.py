@@ -1,5 +1,5 @@
 # drednot_mover.py
-# STABLE VERSION: Debian Slim, Fixed Flags, Debug Logging
+# VERSION: Infinite Uptime, Aggressive Memory Management, No Restarts
 
 import os
 import time
@@ -8,6 +8,7 @@ import threading
 import gc
 import requests
 import traceback
+import resource
 from flask import Flask
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -24,10 +25,37 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 
-# --- 1. WASM HOOK ---
-WASM_HOOK_SCRIPT = """
+# --- MEMORY PROTECTION ---
+def set_soft_memory_limit():
+    """Tells the OS to warn/throw errors before the container crashes hard."""
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        # Set limit to 80% of typical 512MB container to allow Python to catch the error
+        resource.setrlimit(resource.RLIMIT_AS, (450 * 1024 * 1024, hard)) 
+    except:
+        pass
+
+# --- 1. PERFORMANCE KILLER SCRIPT ---
+# This disables rendering and throttles the engine to 1 FPS
+JS_OPTIMIZATION = """
 (function() {
-    'use strict';
+    console.log("⚡ INJECTING OPTIMIZATIONS ⚡");
+    
+    // 1. Disable Console Logs (Prevents log buildup in RAM)
+    console.log = function() {};
+    console.info = function() {};
+    console.warn = function() {};
+    
+    // 2. Throttle Animation Frame (Game Logic runs, Graphics stop)
+    // This forces the game loop to run only once per second (1 FPS)
+    const originalRAF = window.requestAnimationFrame;
+    window.requestAnimationFrame = function(callback) {
+        window.setTimeout(() => {
+            callback(Date.now());
+        }, 1000); // 1000ms delay = 1 FPS
+    };
+
+    // 3. WebAssembly Hook (Keep existing logic)
     try {
         const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
         function patchImports(importObject) {
@@ -53,188 +81,187 @@ WASM_HOOK_SCRIPT = """
 """
 
 # --- 2. MOVEMENT SCRIPT ---
-JS_MOVEMENT_SCRIPT = """
-console.log("[Bot] Starting Movement Loop...");
-let toggle = true;
-function press(key, type) {
-    const eventObj = {
-        key: key, code: 'Key' + key.toUpperCase(),
-        bubbles: true, cancelable: true, view: window, repeat: type === 'keydown'
-    };
-    document.dispatchEvent(new KeyboardEvent(type, eventObj));
-    window.dispatchEvent(new KeyboardEvent(type, eventObj));
-}
+JS_MOVEMENT = """
+// Simple movement ticker
 if (window.botInterval) clearInterval(window.botInterval);
 window.botInterval = setInterval(() => {
-    if (!toggle) return;
-    press('a', 'keydown');
-    setTimeout(() => press('a', 'keyup'), 100);
+    // Press A
+    document.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', code: 'KeyA', bubbles:true}));
+    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', code: 'KeyA', bubbles:true}));
     setTimeout(() => {
-        press('d', 'keydown');
-        setTimeout(() => press('d', 'keyup'), 100);
+        document.dispatchEvent(new KeyboardEvent('keyup', {key: 'a', code: 'KeyA', bubbles:true}));
+        window.dispatchEvent(new KeyboardEvent('keyup', {key: 'a', code: 'KeyA', bubbles:true}));
+    }, 100);
+
+    // Press D
+    setTimeout(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'd', code: 'KeyD', bubbles:true}));
+        window.dispatchEvent(new KeyboardEvent('keydown', {key: 'd', code: 'KeyD', bubbles:true}));
+        setTimeout(() => {
+            document.dispatchEvent(new KeyboardEvent('keyup', {key: 'd', code: 'KeyD', bubbles:true}));
+            window.dispatchEvent(new KeyboardEvent('keyup', {key: 'd', code: 'KeyD', bubbles:true}));
+        }, 100);
     }, 200);
 }, 400);
 """
 
-# --- GLOBAL VAR ---
-driver = None
-
-# --- BROWSER SETUP ---
-def setup_driver():
-    logging.info("Launching Stable Browser (Debian)...")
-    try:
-        chrome_options = Options()
-        chrome_options.binary_location = "/usr/bin/chromium"
-        
-        # --- STABILITY & RAM FLAGS ---
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--window-size=800,600")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage") # Critical for Docker
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--mute-audio")
-        
-        # SAFER RAM SAVING (Removed --single-process which caused crashes)
-        chrome_options.add_argument("--disable-site-isolation-trials") 
-        chrome_options.add_argument("--renderer-process-limit=2") 
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--disable-application-cache")
-        
-        # Block Images
-        prefs = {
-            "profile.managed_default_content_settings.images": 2,
-            "profile.default_content_setting_values.notifications": 2,
-        }
-        chrome_options.add_experimental_option("prefs", prefs)
-        
-        service = Service(executable_path="/usr/bin/chromedriver")
-        d = webdriver.Chrome(service=service, options=chrome_options)
-        
-        # Inject Hook
-        d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": WASM_HOOK_SCRIPT
-        })
-        return d
-    except Exception as e:
-        logging.error("FAILED TO START BROWSER:")
-        logging.error(traceback.format_exc())
-        raise e
-
 # --- FLASK ---
 flask_app = Flask('')
 @flask_app.route('/')
-def health_check():
-    return "Bot Running"
+def health_check(): return "Bot Alive"
+def run_flask(): flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
-
+# --- KEEP ALIVE ---
 def keep_alive():
     url = RENDER_EXTERNAL_URL or f"http://localhost:{os.environ.get('PORT', 8080)}"
-    logging.info(f"Monitor: {url}")
     while True:
         time.sleep(60)
         try: requests.get(url, timeout=5)
         except: pass
 
+# --- BROWSER SETUP ---
+def setup_driver():
+    logging.info("🚀 Launching Chrome...")
+    options = Options()
+    options.binary_location = "/usr/bin/chromium"
+    
+    # Core Headless
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=600,400") # Small window saves buffer RAM
+    
+    # Aggressive Memory Saving
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer") # Disable CPU rendering
+    options.add_argument("--disable-extensions")
+    options.add_argument("--mute-audio")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-application-cache")
+    
+    # V8 Optimization (Limit JS RAM)
+    options.add_argument("--js-flags=--max_old_space_size=256")
+    
+    # Process management
+    options.add_argument("--renderer-process-limit=1")
+    options.add_argument("--disable-site-isolation-trials")
+    
+    service = Service(executable_path="/usr/bin/chromedriver")
+    d = webdriver.Chrome(service=service, options=options)
+    
+    # Inject Optimization immediately on load
+    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": JS_OPTIMIZATION})
+    return d
+
+def perform_maintenance(d):
+    """Cleans memory without closing the browser"""
+    try:
+        # 1. Clear Network Cache (CDP)
+        d.execute_cdp_cmd("Network.clearBrowserCache", {})
+        
+        # 2. Force Garbage Collection (CDP) - This is the magic command
+        d.execute_cdp_cmd("HeapProfiler.collectGarbage", {})
+        
+        # 3. Clear Local Console
+        d.execute_script("console.clear();")
+    except Exception as e:
+        logging.warning(f"Maintenance warning: {e}")
+
 def safe_click(d, element):
     try:
-        d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-        time.sleep(0.5)
-        element.click()
-    except Exception:
         d.execute_script("arguments[0].click();", element)
+    except:
+        element.click()
 
-def start_bot(use_key):
+def start_bot():
     global driver
     driver = setup_driver()
-    wait = WebDriverWait(driver, 40)
-    
+    wait = WebDriverWait(driver, 30)
+
     try:
-        logging.info(f"Navigating: {SHIP_INVITE_LINK}")
+        logging.info("🌍 Navigating...")
         driver.get(SHIP_INVITE_LINK)
         
-        try:
-            driver.execute_script("document.querySelectorAll('iframe, .ad-container').forEach(e => e.remove());")
-        except: pass
-
-        logging.info("Accepting Invite...")
-        accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
+        # Remove Heavy Elements immediately
+        driver.execute_script("document.body.style.backgroundColor = 'black';")
+        
+        logging.info("👉 Clicking Accept...")
+        accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Accept')]")))
         safe_click(driver, accept_btn)
-        
-        time.sleep(3) 
-        
+        time.sleep(2)
+
+        # Login Logic
         logged_in = False
-        if use_key and ANONYMOUS_LOGIN_KEY:
+        if ANONYMOUS_LOGIN_KEY:
             try:
-                logging.info("Attempting Key Login...")
-                restore_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")))
-                safe_click(driver, restore_link)
-                
-                logging.info("Entering Key...")
-                inp = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]')))
-                inp.click()
+                logging.info("🔑 Logging in...")
+                wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore')]"))).click()
+                inp = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'input[maxlength="24"]')))
                 inp.clear()
                 inp.send_keys(ANONYMOUS_LOGIN_KEY)
-                
-                driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", inp)
+                driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles:true}));", inp)
                 time.sleep(1)
-
-                submit_xpath = "//div[contains(@class,'modal-window')]//button[contains(@class, 'btn-green') and text()='Submit']"
-                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, submit_xpath)))
-                safe_click(driver, submit_btn)
-                
-                logging.info("Key submitted.")
+                safe_click(driver, wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Submit')]"))))
                 logged_in = True
-            except Exception as e:
-                logging.warning(f"Login Failed ({e}). Guest Mode.")
+            except:
+                logging.warning("Login failed, falling back to Guest.")
                 driver.refresh()
-                time.sleep(3)
-                try:
-                    accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
-                    safe_click(driver, accept_btn)
+                time.sleep(2)
+                try: safe_click(driver, wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Accept')]"))))
                 except: pass
-        
+
         if not logged_in:
-            logging.info("Playing as Guest...")
-            guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
-            safe_click(driver, guest_btn)
-            
-        logging.info("Injecting Movement Script...")
-        driver.execute_script(JS_MOVEMENT_SCRIPT)
-        time.sleep(5)
-        driver.execute_script(JS_MOVEMENT_SCRIPT)
+            safe_click(driver, wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]"))))
+
+        logging.info("✅ Game Loaded. Injecting Movement.")
+        driver.execute_script(JS_MOVEMENT)
         
-        logging.info("✅ Bot Active.")
+        # FINAL OPTIMIZATION: Delete the Canvas
+        # This stops the browser from painting pixels but keeps WASM running
+        time.sleep(5)
+        logging.info("✂️ Removing Canvas to save RAM...")
+        driver.execute_script("""
+            const canvas = document.getElementById('canvas');
+            if(canvas) { canvas.remove(); }
+            const ui = document.getElementById('ui-container');
+            if(ui) { ui.style.display = 'none'; }
+        """)
+
+        # --- INFINITE LOOP ---
+        logging.info("♾️ Bot is running indefinitely.")
+        maintenance_counter = 0
         
         while True:
-            time.sleep(30)
+            time.sleep(10)
+            
             if not driver.service.is_connectable():
-                raise RuntimeError("Browser disconnected")
+                raise RuntimeError("Browser crashed")
+            
+            # Every 60 seconds (10s * 6), clean memory
+            maintenance_counter += 1
+            if maintenance_counter >= 6:
+                perform_maintenance(driver)
+                maintenance_counter = 0
+                # Re-inject movement just in case
+                driver.execute_script(JS_MOVEMENT) 
 
     except Exception as e:
-        logging.error(f"Crash: {e}")
+        logging.error(f"FATAL ERROR: {e}")
         raise
 
 def main():
+    set_soft_memory_limit()
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
     
     global driver
-    driver = None
-    
     while True:
         try:
-            start_bot(use_key=True)
+            start_bot()
         except Exception:
-            logging.error("Main loop restart...")
-            time.sleep(2)
-        finally:
-            if driver:
-                try: driver.quit()
-                except: pass
-            driver = None
-            gc.collect()
+            logging.info("⚠️ Bot crash detected. Respawning in 5s...")
+            try: driver.quit()
+            except: pass
             time.sleep(5)
 
 if __name__ == "__main__":
