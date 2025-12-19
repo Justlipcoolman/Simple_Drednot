@@ -1,14 +1,21 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
+
+# Set environment variables for real-time logging and Chrome
+ENV PYTHONUNBUFFERED=1
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV CHROME_PATH=/usr/lib/chromium/
 
 WORKDIR /app
 
-# Install chromium and deps
-RUN apt-get update && apt-get install -y \
+# Install Chromium, Driver, and essential fonts for Alpine
+RUN apk add --no-cache \
     chromium \
-    chromium-driver \
+    chromium-chromedriver \
     dumb-init \
-    --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+    freetype \
+    harfbuzz \
+    nss \
+    ttf-freefont
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
