@@ -3,8 +3,7 @@ import time
 import logging
 import threading
 import gc
-import requests
-import traceback
+import sys
 from flask import Flask
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -13,14 +12,20 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# --- LOGGING ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
 # --- CONFIGURATION ---
 SHIP_INVITE_LINK = 'https://drednot.io/invite/-EKifhVqXiiFGvEx9JvGnC9H' 
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT' 
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
-
-# --- 1. NEW HOOK THING (Your Version) ---
+# --- 1. NEW WASM HOOK THING ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
@@ -53,7 +58,7 @@ WASM_HOOK_SCRIPT = """
 })();
 """
 
-# --- 2. OLD MOVEMENT SCRIPT (As requested) ---
+# --- 2. OLD MOVEMENT SCRIPT ---
 JS_MOVEMENT_SCRIPT = """
 console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
@@ -77,15 +82,12 @@ window.botInterval = setInterval(() => {
 }, 400);
 """
 
-# --- 3. NEW MEMORY STUFF (Fixed) ---
+# --- 3. NEW MEMORY STUFF ---
 def perform_memory_cleanup(d):
     try:
-        logging.info("🧹 Aggressive Memory Cleanup Initiated...")
-        # Force V8 GC (needs --expose-gc)
+        logging.info("🧹 Performing Memory Cleanup...")
         d.execute_script("if(window.gc){window.gc();}")
-        # Clear Network Cache
         d.execute_cdp_cmd("Network.clearBrowserCache", {})
-        # Use HeapProfiler (The fix for the 'Memory.forcedGC not found' error)
         try:
             d.execute_cdp_cmd("HeapProfiler.collectGarbage", {})
         except: pass
@@ -93,92 +95,97 @@ def perform_memory_cleanup(d):
     except Exception as e:
         logging.warning(f"Cleanup non-critical error: {e}")
 
-# --- BROWSER SETUP ---
 def setup_driver():
-    logging.info("Launching Stable Browser...")
+    logging.info("🚀 Launching Chromium...")
     chrome_options = Options()
     chrome_options.binary_location = "/usr/bin/chromium"
-    
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--mute-audio")
-    
-    # Memory and GC exposure flags
-    chrome_options.add_argument("--js-flags='--expose-gc --max-old-space-size=512'")
-    chrome_options.add_argument("--enable-low-end-device-mode") 
-    chrome_options.add_argument("--renderer-process-limit=1")
-    
-    prefs = {"profile.managed_default_content_settings.images": 2}
-    chrome_options.add_experimental_option("prefs", prefs)
+    chrome_options.add_argument("--js-flags=--expose-gc --max-old-space-size=512")
     
     service = Service(executable_path="/usr/bin/chromedriver")
     d = webdriver.Chrome(service=service, options=chrome_options)
-    
-    # Inject your new Hook
-    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": WASM_HOOK_SCRIPT
-    })
+    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": WASM_HOOK_SCRIPT})
     return d
 
-# --- FLASK & UTILS ---
-flask_app = Flask('')
-@flask_app.route('/')
-def health_check(): return "Bot Running"
-
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
-
-def start_bot(use_key):
+def start_bot():
     driver = setup_driver()
-    wait = WebDriverWait(driver, 40)
+    wait = WebDriverWait(driver, 45)
     last_cleanup = time.time()
     
     try:
-        logging.info(f"Navigating: {SHIP_INVITE_LINK}")
+        logging.info(f"📍 Navigating to {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
-        # Accept Invite
+        # Step 1: Accept Invite
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         driver.execute_script("arguments[0].click();", accept_btn)
-        
         time.sleep(5)
         
-        # Play Anonymously (Guest)
+        # Step 2: ADDED BACK - Login with Key
+        if ANONYMOUS_LOGIN_KEY:
+            try:
+                logging.info("🔑 Attempting Login with Anonymous Key...")
+                restore_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")))
+                driver.execute_script("arguments[0].click();", restore_link)
+                
+                # Enter key into the modal input
+                key_input = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.modal-window input")))
+                key_input.send_keys(ANONYMOUS_LOGIN_KEY)
+                
+                # Force React/Wasm to detect the input text
+                driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", key_input)
+                time.sleep(1)
+                
+                # Click Submit inside the modal
+                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'modal-window')]//button[text()='Submit']")))
+                driver.execute_script("arguments[0].click();", submit_btn)
+                logging.info("✅ Key Login Submitted.")
+                time.sleep(5)
+            except Exception as e:
+                logging.warning(f"⚠️ Key Login skip: {e}")
+
+        # Step 3: Click Play Anonymously (Guest fallback)
         try:
             guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
             driver.execute_script("arguments[0].click();", guest_btn)
-        except: pass
+            logging.info("✔️ Playing...")
+        except: 
+            logging.info("Already in game.")
 
-        logging.info("Injecting Old Movement Script...")
+        # Step 4: Movement Script
+        logging.info("⌨️ Injecting Movement...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
-        logging.info("✅ Bot Active.")
         
         while True:
-            time.sleep(30)
-            # Run the new memory cleanup every 10 mins
+            time.sleep(60)
             if time.time() - last_cleanup > 600:
                 perform_memory_cleanup(driver)
                 last_cleanup = time.time()
-            
-            # Simple title check to ensure browser is still alive
-            _ = driver.title
+            logging.info("💓 Heartbeat: Bot is moving")
+            _ = driver.title # Check for crash
 
     except Exception as e:
-        logging.error(f"Crash: {e}")
+        logging.error(f"❌ CRASH: {e}")
         raise
     finally:
         if driver:
             driver.quit()
 
+# --- FLASK SERVER ---
+flask_app = Flask('')
+@flask_app.route('/')
+def health(): return "Bot Running"
+
 def main():
-    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     while True:
         try:
-            start_bot(use_key=True)
-        except Exception:
-            logging.error("Restarting main loop...")
+            start_bot()
+        except:
             time.sleep(10)
             gc.collect()
 
