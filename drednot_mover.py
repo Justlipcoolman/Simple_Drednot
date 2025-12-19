@@ -12,7 +12,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# --- LOGGING (Fixed for real-time) ---
+# --- 1. LOGGING (Optimized for real-time) ---
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(message)s',
@@ -20,12 +20,12 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-# --- CONFIGURATION ---
+# --- 2. CONFIGURATION ---
 SHIP_INVITE_LINK = 'https://drednot.io/invite/-EKifhVqXiiFGvEx9JvGnC9H' 
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT' 
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-# --- 1. NEW WASM HOOK THING ---
+# --- 3. THE NEW WASM HOOK (Your Bypass) ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
@@ -39,9 +39,7 @@ WASM_HOOK_SCRIPT = """
         Object.keys(importObject.wbg).forEach(key => {
             if (key.includes('isTrusted')) {
                 console.log(`[Wasm Hook] DETECTED: ${key}. Overriding to force true.`);
-                importObject.wbg[key] = function(eventPtr) {
-                    return 1;
-                };
+                importObject.wbg[key] = function(eventPtr) { return 1; };
             }
         });
     }
@@ -58,7 +56,7 @@ WASM_HOOK_SCRIPT = """
 })();
 """
 
-# --- 2. OLD MOVEMENT SCRIPT (Fixed with KeyCodes) ---
+# --- 4. THE OLD MOVEMENT SCRIPT (400ms Loop) ---
 JS_MOVEMENT_SCRIPT = """
 console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
@@ -88,12 +86,19 @@ window.botInterval = setInterval(() => {
         setTimeout(() => press('d', 'keyup'), 100);
     }, 200);
 }, 400);
+
+// Extra Janitor: Strip DOM bloat
+setInterval(() => {
+    ['.chat-container', '.ad-container', 'iframe', '.social-links'].forEach(s => {
+        document.querySelectorAll(s).forEach(el => el.remove());
+    });
+}, 30000);
 """
 
-# --- 3. NEW MEMORY STUFF ---
+# --- 5. NEW MEMORY STUFF ---
 def perform_memory_cleanup(d):
     try:
-        logging.info("🧹 Performing Memory Cleanup...")
+        logging.info("🧹 Performing Scheduled Memory Cleanup...")
         d.execute_script("if(window.gc){window.gc();}")
         d.execute_cdp_cmd("Network.clearBrowserCache", {})
         try:
@@ -103,30 +108,38 @@ def perform_memory_cleanup(d):
     except Exception as e:
         logging.warning(f"Cleanup error: {e}")
 
+# --- 6. BROWSER SETUP (Alpine Optimized) ---
 def setup_driver():
-    logging.info("🚀 Launching Chromium...")
+    logging.info("🚀 Launching Alpine-based Chromium...")
     chrome_options = Options()
-    chrome_options.binary_location = "/usr/bin/chromium"
+    # Alpine path for Chromium
+    chrome_options.binary_location = "/usr/bin/chromium-browser"
+    
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--mute-audio")
     
-    # Anti-Throttling Flags (Ensures movement script doesn't "break" when tab is hidden)
+    # Aggressive memory saving for 512MB environments
+    chrome_options.add_argument("--window-size=120,120")
+    chrome_options.add_argument("--js-flags=--expose-gc --max-old-space-size=400")
+    chrome_options.add_argument("--renderer-process-limit=1")
+    
+    # Anti-Throttling
     chrome_options.add_argument("--disable-renderer-backgrounding")
     chrome_options.add_argument("--disable-background-timer-throttling")
-    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-    chrome_options.add_argument("--disable-ipc-flooding-protection")
     
-    # Memory and GC exposure
-    chrome_options.add_argument("--js-flags=--expose-gc --max-old-space-size=512")
-    
-    prefs = {"profile.managed_default_content_settings.images": 2}
+    prefs = {
+        "profile.managed_default_content_settings.images": 2,
+        "profile.managed_default_content_settings.fonts": 2,
+    }
     chrome_options.add_experimental_option("prefs", prefs)
     
+    # Use Chromedriver from Alpine packages
     service = Service(executable_path="/usr/bin/chromedriver")
     d = webdriver.Chrome(service=service, options=chrome_options)
+    
     d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": WASM_HOOK_SCRIPT})
     return d
 
@@ -136,15 +149,15 @@ def start_bot():
     last_cleanup = time.time()
     
     try:
-        logging.info(f"📍 Navigating to {SHIP_INVITE_LINK}")
+        logging.info(f"📍 Navigating: {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
-        # 1. Accept Invite
+        # Invite
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         driver.execute_script("arguments[0].click();", accept_btn)
         time.sleep(5)
         
-        # 2. Login with Key (Restored)
+        # Restore Anonymous Account (Restored)
         if ANONYMOUS_LOGIN_KEY:
             try:
                 logging.info("🔑 Logging in with Key...")
@@ -158,41 +171,41 @@ def start_bot():
                 
                 submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'modal-window')]//button[text()='Submit']")))
                 driver.execute_script("arguments[0].click();", submit_btn)
-                logging.info("✅ Login Submitted.")
+                logging.info("✅ Key submitted.")
                 time.sleep(5)
             except Exception as e:
-                logging.warning(f"⚠️ Key Login skip: {e}")
+                logging.warning(f"Key login skip: {e}")
 
-        # 3. Play
+        # Play
         try:
-            guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
-            driver.execute_script("arguments[0].click();", guest_btn)
+            play_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play')]")))
+            driver.execute_script("arguments[0].click();", play_btn)
         except: pass
 
-        # 4. Movement
+        # Movement
         logging.info("⌨️ Injecting Movement...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
-        logging.info("✅ Bot Active.")
+        logging.info("✅ BOT ACTIVE")
         
         while True:
             time.sleep(60)
-            if time.time() - last_cleanup > 600:
+            if time.time() - last_cleanup > 300:
                 perform_memory_cleanup(driver)
                 last_cleanup = time.time()
-            logging.info("💓 Heartbeat: Active")
-            _ = driver.title 
+            logging.info("💓 Heartbeat: Alive")
+            _ = driver.title
 
     except Exception as e:
-        logging.error(f"❌ CRASH: {e}")
+        logging.error(f"❌ Crash: {e}")
         raise
     finally:
         if driver:
             driver.quit()
 
-# --- FLASK ---
+# --- FLASK SERVER ---
 flask_app = Flask('')
 @flask_app.route('/')
-def health(): return "Bot Running"
+def health(): return "OK"
 
 def main():
     threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
