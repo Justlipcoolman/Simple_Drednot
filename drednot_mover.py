@@ -20,7 +20,7 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 
-# --- WASM HOOK ---
+# --- 1. WASM HOOK ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
@@ -43,7 +43,7 @@ WASM_HOOK_SCRIPT = """
 })();
 """
 
-# --- YOUR ORIGINAL MOVEMENT SCRIPT ---
+# --- 2. YOUR ORIGINAL MOVEMENT SCRIPT (RETAINED) ---
 JS_MOVEMENT_SCRIPT = """
 console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
@@ -67,45 +67,50 @@ window.botInterval = setInterval(() => {
 }, 400);
 """
 
-# --- MEMORY CLEANUP FUNCTION (The "Janitor") ---
+# --- 3. UPDATED CLEANUP FUNCTION (FIXED ERROR) ---
 def perform_memory_cleanup(d):
-    """Forced memory purging without refreshing the page."""
+    """Forced memory purging using compatible 2025 commands."""
     try:
         logging.info("🧹 Aggressive Memory Cleanup Initiated...")
-        # 1. Force V8 Garbage Collection (Requires --expose-gc flag)
+        
+        # 1. Clear internal script memory (window.gc requires --expose-gc flag)
         d.execute_script("if(window.gc){window.gc();}")
-        # 2. Clear browser internal caches via CDP
+        
+        # 2. Clear browser caches
         d.execute_cdp_cmd("Network.clearBrowserCache", {})
-        # 3. Force Heap Cleanup via CDP
-        d.execute_cdp_cmd("Memory.forcedGC", {})
-        # 4. Clear console to prevent string bloat
+        
+        # 3. Fixed: Use HeapProfiler instead of the 'not found' Memory.forcedGC
+        try:
+            d.execute_cdp_cmd("HeapProfiler.enable", {})
+            d.execute_cdp_cmd("HeapProfiler.collectGarbage", {})
+            d.execute_cdp_cmd("HeapProfiler.disable", {})
+        except Exception:
+            pass # Fallback if HeapProfiler is restricted
+            
+        # 4. Clear console to prevent log storage bloat
         d.execute_script("console.clear();")
+        logging.info("✨ Cleanup complete.")
     except Exception as e:
         logging.warning(f"Cleanup non-critical error: {e}")
 
-# --- BROWSER SETUP (Memory Optimized Flags) ---
+# --- BROWSER SETUP ---
 def setup_driver():
     logging.info("Launching Optimized Browser (No-Restart Mode)...")
     chrome_options = Options()
     chrome_options.binary_location = "/usr/bin/chromium"
     
-    # Standard Headless Flags
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--mute-audio")
     
-    # NEW: Aggressive Memory Management Flags
-    # --expose-gc allows us to call window.gc() from Python
-    # --max-old-space-size limits the JS heap to 512MB
+    # Flags for Manual GC and Memory Limiting
     chrome_options.add_argument("--js-flags='--expose-gc --max-old-space-size=512'")
     chrome_options.add_argument("--enable-low-end-device-mode") 
     chrome_options.add_argument("--renderer-process-limit=1")
     chrome_options.add_argument("--disable-site-isolation-trials")
-    chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
     
-    # Block heavy visual assets to save RAM
     prefs = {
         "profile.managed_default_content_settings.images": 2,
         "profile.default_content_setting_values.notifications": 2,
@@ -115,22 +120,19 @@ def setup_driver():
     service = Service(executable_path="/usr/bin/chromedriver")
     d = webdriver.Chrome(service=service, options=chrome_options)
     
-    # Inject Hook
-    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": WASM_HOOK_SCRIPT
-    })
+    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": WASM_HOOK_SCRIPT})
     return d
 
-# --- FLASK ---
+# --- FLASK & KEEP ALIVE ---
 flask_app = Flask('')
 @flask_app.route('/')
 def health_check(): return "Bot Running"
 
 def run_flask():
-    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 def keep_alive():
-    url = RENDER_EXTERNAL_URL or f"http://localhost:{os.environ.get('PORT', 8080)}"
+    url = RENDER_EXTERNAL_URL or f"http://localhost:{os.environ.get('PORT', 10000)}"
     while True:
         time.sleep(60)
         try: requests.get(url, timeout=5)
@@ -138,11 +140,9 @@ def keep_alive():
 
 def safe_click(d, element):
     try:
-        d.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-        time.sleep(0.5)
-        element.click()
-    except Exception:
         d.execute_script("arguments[0].click();", element)
+    except:
+        element.click()
 
 def start_bot(use_key):
     driver = setup_driver()
@@ -156,7 +156,7 @@ def start_bot(use_key):
         # Accept Invite
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         safe_click(driver, accept_btn)
-        time.sleep(3) 
+        time.sleep(5) 
         
         # Login Logic
         logged_in = False
@@ -167,9 +167,10 @@ def start_bot(use_key):
                 inp = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.modal-window input[maxlength="24"]')))
                 inp.send_keys(ANONYMOUS_LOGIN_KEY)
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", inp)
-                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'modal-window')]//button[text()='Submit']")))
+                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[text()='Submit']")))
                 safe_click(driver, submit_btn)
                 logged_in = True
+                time.sleep(2)
             except: pass
         
         if not logged_in:
@@ -180,20 +181,18 @@ def start_bot(use_key):
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         logging.info("✅ Bot Active. No-Restart mode enabled.")
         
-        # --- PERMANENT LOOP ---
         while True:
             time.sleep(30)
             
-            # Run cleanup every 10 minutes
+            # Cleanup every 10 minutes to prevent RAM creep
             if time.time() - last_cleanup > 600:
                 perform_memory_cleanup(driver)
                 last_cleanup = time.time()
             
-            # Simple health check to see if browser crashed
-            _ = driver.title 
+            _ = driver.title # Health check
 
     except Exception as e:
-        logging.error(f"Critical Error: {e}")
+        logging.error(f"Crash: {e}")
         raise
     finally:
         if driver:
@@ -207,7 +206,7 @@ def main():
         try:
             start_bot(use_key=True)
         except Exception:
-            logging.error("Process failure, restarting browser...")
+            logging.error("Restarting browser process...")
             time.sleep(10)
             gc.collect()
 
