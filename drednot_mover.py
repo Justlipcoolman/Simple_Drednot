@@ -12,7 +12,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# --- LOGGING ---
+# --- LOGGING (Fixed for real-time) ---
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(message)s',
@@ -58,17 +58,25 @@ WASM_HOOK_SCRIPT = """
 })();
 """
 
-# --- 2. OLD MOVEMENT SCRIPT ---
+# --- 2. OLD MOVEMENT SCRIPT (Fixed with KeyCodes) ---
 JS_MOVEMENT_SCRIPT = """
 console.log("[Bot] Starting Movement Loop...");
 let toggle = true;
 function press(key, type) {
+    const kCode = (key === 'a') ? 65 : 68;
     const eventObj = {
-        key: key, code: 'Key' + key.toUpperCase(),
-        bubbles: true, cancelable: true, view: window, repeat: type === 'keydown'
+        key: key, 
+        code: 'Key' + key.toUpperCase(),
+        keyCode: kCode,
+        which: kCode,
+        bubbles: true, 
+        cancelable: true, 
+        view: window, 
+        repeat: type === 'keydown'
     };
-    document.dispatchEvent(new KeyboardEvent(type, eventObj));
-    window.dispatchEvent(new KeyboardEvent(type, eventObj));
+    const ev = new KeyboardEvent(type, eventObj);
+    document.dispatchEvent(ev);
+    window.dispatchEvent(ev);
 }
 if (window.botInterval) clearInterval(window.botInterval);
 window.botInterval = setInterval(() => {
@@ -93,7 +101,7 @@ def perform_memory_cleanup(d):
         except: pass
         d.execute_script("console.clear();")
     except Exception as e:
-        logging.warning(f"Cleanup non-critical error: {e}")
+        logging.warning(f"Cleanup error: {e}")
 
 def setup_driver():
     logging.info("🚀 Launching Chromium...")
@@ -104,7 +112,18 @@ def setup_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--mute-audio")
+    
+    # Anti-Throttling Flags (Ensures movement script doesn't "break" when tab is hidden)
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-ipc-flooding-protection")
+    
+    # Memory and GC exposure
     chrome_options.add_argument("--js-flags=--expose-gc --max-old-space-size=512")
+    
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    chrome_options.add_experimental_option("prefs", prefs)
     
     service = Service(executable_path="/usr/bin/chromedriver")
     d = webdriver.Chrome(service=service, options=chrome_options)
@@ -120,53 +139,48 @@ def start_bot():
         logging.info(f"📍 Navigating to {SHIP_INVITE_LINK}")
         driver.get(SHIP_INVITE_LINK)
         
-        # Step 1: Accept Invite
+        # 1. Accept Invite
         accept_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")))
         driver.execute_script("arguments[0].click();", accept_btn)
         time.sleep(5)
         
-        # Step 2: ADDED BACK - Login with Key
+        # 2. Login with Key (Restored)
         if ANONYMOUS_LOGIN_KEY:
             try:
-                logging.info("🔑 Attempting Login with Anonymous Key...")
+                logging.info("🔑 Logging in with Key...")
                 restore_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")))
                 driver.execute_script("arguments[0].click();", restore_link)
                 
-                # Enter key into the modal input
                 key_input = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.modal-window input")))
                 key_input.send_keys(ANONYMOUS_LOGIN_KEY)
-                
-                # Force React/Wasm to detect the input text
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", key_input)
                 time.sleep(1)
                 
-                # Click Submit inside the modal
                 submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'modal-window')]//button[text()='Submit']")))
                 driver.execute_script("arguments[0].click();", submit_btn)
-                logging.info("✅ Key Login Submitted.")
+                logging.info("✅ Login Submitted.")
                 time.sleep(5)
             except Exception as e:
                 logging.warning(f"⚠️ Key Login skip: {e}")
 
-        # Step 3: Click Play Anonymously (Guest fallback)
+        # 3. Play
         try:
             guest_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Play Anonymously')]")))
             driver.execute_script("arguments[0].click();", guest_btn)
-            logging.info("✔️ Playing...")
-        except: 
-            logging.info("Already in game.")
+        except: pass
 
-        # Step 4: Movement Script
+        # 4. Movement
         logging.info("⌨️ Injecting Movement...")
         driver.execute_script(JS_MOVEMENT_SCRIPT)
+        logging.info("✅ Bot Active.")
         
         while True:
             time.sleep(60)
             if time.time() - last_cleanup > 600:
                 perform_memory_cleanup(driver)
                 last_cleanup = time.time()
-            logging.info("💓 Heartbeat: Bot is moving")
-            _ = driver.title # Check for crash
+            logging.info("💓 Heartbeat: Active")
+            _ = driver.title 
 
     except Exception as e:
         logging.error(f"❌ CRASH: {e}")
@@ -175,7 +189,7 @@ def start_bot():
         if driver:
             driver.quit()
 
-# --- FLASK SERVER ---
+# --- FLASK ---
 flask_app = Flask('')
 @flask_app.route('/')
 def health(): return "Bot Running"
