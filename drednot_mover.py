@@ -24,45 +24,45 @@ logging.basicConfig(
 SHIP_INVITE_LINK = 'https://drednot.io/invite/-EKifhVqXiiFGvEx9JvGnC9H'
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT'
 
-# --- SAFE WASM HOOK (NO LEAKS / NO DOUBLE PATCH) ---
+# --- WASM HOOK (SAFE VERSION) ---
 WASM_HOOK_SCRIPT = """
-(function () {
+(function() {
     'use strict';
     if (window.__wasmHookInstalled) return;
     window.__wasmHookInstalled = true;
 
-    const forceTrue = () => 1;
     const win = window;
-
     const origInst = win.WebAssembly.instantiate;
     const origStream = win.WebAssembly.instantiateStreaming;
+
+    const forceTrue = () => 1;
 
     function patch(imports) {
         try {
             if (!imports || !imports.wbg) return;
             for (const k in imports.wbg) {
-                if (k.includes('isTrusted')) {
+                if (k.indexOf('isTrusted') !== -1) {
                     imports.wbg[k] = forceTrue;
                 }
             }
         } catch (e) {}
     }
 
-    win.WebAssembly.instantiate = function (buf, imports) {
+    win.WebAssembly.instantiate = function(buf, imports) {
         patch(imports);
         return origInst.apply(this, arguments);
     };
 
-    win.WebAssembly.instantiateStreaming = function (src, imports) {
+    win.WebAssembly.instantiateStreaming = function(src, imports) {
         patch(imports);
         return origStream.apply(this, arguments);
     };
 })();
 """
 
-# --- STABLE MOVEMENT (SINGLE TIMER) ---
+# --- MOVEMENT SCRIPT (STABLE) ---
 JS_MOVEMENT_SCRIPT = """
-console.log('[Bot] Movement started');
+console.log("[Bot] Movement loop started");
 
 function press(key, type) {
     const k = key === 'a' ? 65 : 68;
@@ -85,52 +85,32 @@ window.botInterval = setInterval(() => {
 }, 400);
 """
 
-# --- DRIVER SETUP (HARD MEMORY CAPPED FOR RENDER) ---
+# --- DRIVER SETUP (CRASH-SAFE) ---
 def setup_driver():
     logging.info("🚀 Launching Chromium")
 
     opts = Options()
     opts.binary_location = "/usr/bin/chromium"
 
-    # core
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--mute-audio")
 
-    # process + memory caps (CRITICAL)
-    opts.add_argument("--single-process")
-    opts.add_argument("--renderer-process-limit=1")
-    opts.add_argument("--disable-site-isolation-trials")
-    opts.add_argument("--disable-features=SitePerProcess")
-    opts.add_argument("--disable-features=SharedArrayBuffer")
-
-    # wasm + js hard limits
-    opts.add_argument("--js-flags=--max-old-space-size=256")
-    opts.add_argument("--disable-features=WebAssemblyTiering")
-    opts.add_argument("--disable-features=WebAssemblyLazyCompilation")
-
-    # gpu / raster kill
-    opts.add_argument("--disable-gpu-compositing")
-    opts.add_argument("--disable-software-rasterizer")
-    opts.add_argument("--disable-accelerated-2d-canvas")
-    opts.add_argument("--disable-accelerated-video-decode")
-
-    # background / helpers
+    # prevent throttling
     opts.add_argument("--disable-renderer-backgrounding")
     opts.add_argument("--disable-background-timer-throttling")
     opts.add_argument("--disable-backgrounding-occluded-windows")
+
+    # crash hardening (IMPORTANT)
     opts.add_argument("--disable-breakpad")
     opts.add_argument("--disable-crash-reporter")
-    opts.add_argument("--disable-component-update")
-    opts.add_argument("--disable-domain-reliability")
-    opts.add_argument("--disable-client-side-phishing-detection")
-    opts.add_argument("--disable-default-apps")
-    opts.add_argument("--disable-sync")
-    opts.add_argument("--disable-translate")
     opts.add_argument("--disable-features=AudioServiceOutOfProcess")
     opts.add_argument("--disable-features=CalculateNativeWinOcclusion")
+
+    # JS heap limit ONLY
+    opts.add_argument("--js-flags=--max-old-space-size=512")
 
     opts.add_experimental_option("prefs", {
         "profile.managed_default_content_settings.images": 2,
@@ -142,7 +122,7 @@ def setup_driver():
         options=opts
     )
 
-    # inject WASM hook before page scripts
+    # Inject WASM hook early
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": WASM_HOOK_SCRIPT}
@@ -159,7 +139,7 @@ def start_bot():
         logging.info("📍 Navigating to invite")
         driver.get(SHIP_INVITE_LINK)
 
-        # disable devtools buffers AFTER load (safe)
+        # AFTER page load → disable devtools buffers (safe timing)
         driver.execute_cdp_cmd("Log.disable", {})
         driver.execute_cdp_cmd("Runtime.disable", {})
         driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
@@ -206,7 +186,7 @@ def start_bot():
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         logging.info("✅ Bot active")
 
-        # ---- LONG-RUN LOOP ----
+        # STABLE LOOP
         while True:
             time.sleep(60)
             _ = driver.title
@@ -218,9 +198,8 @@ def start_bot():
     finally:
         driver.quit()
 
-# --- FLASK KEEPALIVE ---
+# --- FLASK ---
 app = Flask(__name__)
-
 @app.route("/")
 def health():
     return "Bot Running"
