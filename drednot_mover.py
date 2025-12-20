@@ -23,114 +23,110 @@ logging.basicConfig(
 # --- CONFIG ---
 SHIP_INVITE_LINK = 'https://drednot.io/invite/-EKifhVqXiiFGvEx9JvGnC9H'
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT'
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
-# --- WASM HOOK (NO CLOSURE LEAK) ---
+# --- WASM HOOK (SAFE VERSION) ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
+    if (window.__wasmHookInstalled) return;
+    window.__wasmHookInstalled = true;
 
     const win = window;
-    const originalInstantiate = win.WebAssembly.instantiate;
-    const originalInstantiateStreaming = win.WebAssembly.instantiateStreaming;
+    const origInst = win.WebAssembly.instantiate;
+    const origStream = win.WebAssembly.instantiateStreaming;
 
     const forceTrue = () => 1;
 
-    function patchImports(importObject) {
-        if (!importObject || !importObject.wbg) return;
-        for (const key in importObject.wbg) {
-            if (key.includes('isTrusted')) {
-                importObject.wbg[key] = forceTrue;
+    function patch(imports) {
+        try {
+            if (!imports || !imports.wbg) return;
+            for (const k in imports.wbg) {
+                if (k.indexOf('isTrusted') !== -1) {
+                    imports.wbg[k] = forceTrue;
+                }
             }
-        }
+        } catch (e) {}
     }
 
-    win.WebAssembly.instantiate = function(bufferSource, importObject) {
-        if (importObject) patchImports(importObject);
-        return originalInstantiate.apply(this, arguments);
+    win.WebAssembly.instantiate = function(buf, imports) {
+        patch(imports);
+        return origInst.apply(this, arguments);
     };
 
-    win.WebAssembly.instantiateStreaming = function(source, importObject) {
-        if (importObject) patchImports(importObject);
-        return originalInstantiateStreaming.apply(this, arguments);
+    win.WebAssembly.instantiateStreaming = function(src, imports) {
+        patch(imports);
+        return origStream.apply(this, arguments);
     };
 })();
 """
 
-# --- MOVEMENT SCRIPT (SINGLE TIMER, STABLE) ---
+# --- MOVEMENT SCRIPT (STABLE) ---
 JS_MOVEMENT_SCRIPT = """
-console.log("[Bot] Stable movement loop started");
+console.log("[Bot] Movement loop started");
 
 function press(key, type) {
-    const kCode = key === 'a' ? 65 : 68;
-    const ev = new KeyboardEvent(type, {
+    const k = key === 'a' ? 65 : 68;
+    document.dispatchEvent(new KeyboardEvent(type, {
         key,
         code: 'Key' + key.toUpperCase(),
-        keyCode: kCode,
-        which: kCode,
-        bubbles: true,
-        cancelable: true
-    });
-    document.dispatchEvent(ev);
+        keyCode: k,
+        which: k,
+        bubbles: true
+    }));
 }
 
 if (window.botInterval) clearInterval(window.botInterval);
 
-let state = 0;
+let s = 0;
 window.botInterval = setInterval(() => {
-    const key = (state++ & 1) === 0 ? 'a' : 'd';
+    const key = (s++ & 1) ? 'd' : 'a';
     press(key, 'keydown');
     setTimeout(() => press(key, 'keyup'), 80);
-}, 380);
+}, 400);
 """
 
-# --- DRIVER SETUP (MEMORY-STABLE) ---
+# --- DRIVER SETUP (CRASH-SAFE) ---
 def setup_driver():
     logging.info("🚀 Launching Chromium")
 
-    chrome_options = Options()
-    chrome_options.binary_location = "/usr/bin/chromium"
+    opts = Options()
+    opts.binary_location = "/usr/bin/chromium"
 
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--mute-audio")
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--mute-audio")
 
     # prevent throttling
-    chrome_options.add_argument("--disable-renderer-backgrounding")
-    chrome_options.add_argument("--disable-background-timer-throttling")
-    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    opts.add_argument("--disable-renderer-backgrounding")
+    opts.add_argument("--disable-background-timer-throttling")
+    opts.add_argument("--disable-backgrounding-occluded-windows")
 
-    # real memory savings
-    chrome_options.add_argument("--disable-breakpad")
-    chrome_options.add_argument("--disable-crash-reporter")
-    chrome_options.add_argument("--disable-features=AudioServiceOutOfProcess")
-    chrome_options.add_argument("--memory-pressure-off")
+    # crash hardening (IMPORTANT)
+    opts.add_argument("--disable-breakpad")
+    opts.add_argument("--disable-crash-reporter")
+    opts.add_argument("--disable-features=AudioServiceOutOfProcess")
+    opts.add_argument("--disable-features=CalculateNativeWinOcclusion")
 
-    # JS heap limit ONLY (no expose-gc)
-    chrome_options.add_argument("--js-flags=--max-old-space-size=512")
+    # JS heap limit ONLY
+    opts.add_argument("--js-flags=--max-old-space-size=512")
 
-    prefs = {
+    opts.add_experimental_option("prefs", {
         "profile.managed_default_content_settings.images": 2,
         "disk-cache-size": 0
-    }
-    chrome_options.add_experimental_option("prefs", prefs)
+    })
 
-    service = Service("/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver = webdriver.Chrome(
+        service=Service("/usr/bin/chromedriver"),
+        options=opts
+    )
 
-    # inject WASM hook early
+    # Inject WASM hook early
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": WASM_HOOK_SCRIPT}
     )
-
-    # disable devtools buffers (major leak source)
-    driver.execute_cdp_cmd("Log.disable", {})
-    driver.execute_cdp_cmd("Runtime.disable", {})
-    driver.execute_cdp_cmd("Network.enable", {"maxTotalBufferSize": 1024 * 1024})
-    driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
 
     return driver
 
@@ -140,22 +136,26 @@ def start_bot():
     wait = WebDriverWait(driver, 45)
 
     try:
-        logging.info(f"📍 Navigating to invite")
+        logging.info("📍 Navigating to invite")
         driver.get(SHIP_INVITE_LINK)
 
-        accept_btn = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, "//button[contains(@class, 'btn-green') and text()='Accept']")
+        # AFTER page load → disable devtools buffers (safe timing)
+        driver.execute_cdp_cmd("Log.disable", {})
+        driver.execute_cdp_cmd("Runtime.disable", {})
+        driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+
+        accept = wait.until(EC.element_to_be_clickable(
+            (By.XPATH, "//button[contains(@class,'btn-green') and text()='Accept']")
         ))
-        driver.execute_script("arguments[0].click();", accept_btn)
+        driver.execute_script("arguments[0].click();", accept)
         time.sleep(5)
 
         if ANONYMOUS_LOGIN_KEY:
             try:
-                logging.info("🔑 Restoring anonymous key")
-                restore_link = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//a[contains(text(), 'Restore old anonymous key')]")
+                restore = wait.until(EC.element_to_be_clickable(
+                    (By.XPATH, "//a[contains(text(),'Restore old anonymous key')]")
                 ))
-                driver.execute_script("arguments[0].click();", restore_link)
+                driver.execute_script("arguments[0].click();", restore)
 
                 key_input = wait.until(EC.visibility_of_element_located(
                     (By.CSS_SELECTOR, "div.modal-window input")
@@ -166,19 +166,19 @@ def start_bot():
                     key_input
                 )
 
-                submit_btn = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//div[contains(@class,'modal-window')]//button[text()='Submit']")
+                submit = wait.until(EC.element_to_be_clickable(
+                    (By.XPATH, "//button[text()='Submit']")
                 ))
-                driver.execute_script("arguments[0].click();", submit_btn)
+                driver.execute_script("arguments[0].click();", submit)
                 time.sleep(5)
             except Exception as e:
                 logging.warning(f"Key restore skipped: {e}")
 
         try:
-            guest_btn = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//button[contains(., 'Play Anonymously')]")
+            play = wait.until(EC.element_to_be_clickable(
+                (By.XPATH, "//button[contains(.,'Play Anonymously')]")
             ))
-            driver.execute_script("arguments[0].click();", guest_btn)
+            driver.execute_script("arguments[0].click();", play)
         except:
             pass
 
@@ -186,11 +186,11 @@ def start_bot():
         driver.execute_script(JS_MOVEMENT_SCRIPT)
         logging.info("✅ Bot active")
 
-        # ---- STABLE LONG-RUN LOOP (NO CLEANUP, NO RESTART) ----
+        # STABLE LOOP
         while True:
             time.sleep(60)
             _ = driver.title
-            logging.info("💓 Heartbeat: Alive")
+            logging.info("💓 Heartbeat")
 
     except Exception as e:
         logging.error(f"❌ Crash: {e}")
@@ -198,16 +198,16 @@ def start_bot():
     finally:
         driver.quit()
 
-# --- FLASK KEEPALIVE ---
-flask_app = Flask('')
-@flask_app.route('/')
+# --- FLASK ---
+app = Flask(__name__)
+@app.route("/")
 def health():
     return "Bot Running"
 
 def main():
     threading.Thread(
-        target=lambda: flask_app.run(
-            host='0.0.0.0',
+        target=lambda: app.run(
+            host="0.0.0.0",
             port=int(os.environ.get("PORT", 10000)),
             use_reloader=False
         ),
