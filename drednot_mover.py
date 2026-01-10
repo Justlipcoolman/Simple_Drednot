@@ -21,38 +21,31 @@ logging.basicConfig(
 )
 
 # --- CONFIG ---
-SHIP_INVITE_LINK = 'https://drednot.io/invite/-EKifhVqXiiFGvEx9JvGnC9H'
+TARGET_URL = 'https://drednot.io/'
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT'
 
-# --- WASM HOOK (SAFE VERSION) ---
+# --- WASM HOOK (Necessary for Drednot's engine) ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
     if (window.__wasmHookInstalled) return;
     window.__wasmHookInstalled = true;
-
     const win = window;
     const origInst = win.WebAssembly.instantiate;
     const origStream = win.WebAssembly.instantiateStreaming;
-
     const forceTrue = () => 1;
-
     function patch(imports) {
         try {
             if (!imports || !imports.wbg) return;
             for (const k in imports.wbg) {
-                if (k.indexOf('isTrusted') !== -1) {
-                    imports.wbg[k] = forceTrue;
-                }
+                if (k.indexOf('isTrusted') !== -1) imports.wbg[k] = forceTrue;
             }
         } catch (e) {}
     }
-
     win.WebAssembly.instantiate = function(buf, imports) {
         patch(imports);
         return origInst.apply(this, arguments);
     };
-
     win.WebAssembly.instantiateStreaming = function(src, imports) {
         patch(imports);
         return origStream.apply(this, arguments);
@@ -60,56 +53,57 @@ WASM_HOOK_SCRIPT = """
 })();
 """
 
-# --- MOVEMENT SCRIPT (STABLE) ---
-JS_MOVEMENT_SCRIPT = """
-console.log("[Bot] Movement loop started");
+# --- YOUR CUSTOM LOOP SCRIPT ---
+JS_LOOP_SCRIPT = """
+(async function () {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function press(key, type) {
-    const k = key === 'a' ? 65 : 68;
-    document.dispatchEvent(new KeyboardEvent(type, {
-        key,
-        code: 'Key' + key.toUpperCase(),
-        keyCode: k,
-        which: k,
-        bubbles: true
-    }));
-}
+  function clickByText(tag, text) {
+    const el = [...document.querySelectorAll(tag)]
+      .find(e => e.textContent.trim().includes(text));
+    if (el) {
+        el.click();
+        return true;
+    }
+    return false;
+  }
 
-if (window.botInterval) clearInterval(window.botInterval);
+  console.log("[Bot] Cycle Script Started");
 
-let s = 0;
-window.botInterval = setInterval(() => {
-    const key = (s++ & 1) ? 'd' : 'a';
-    press(key, 'keydown');
-    setTimeout(() => press(key, 'keyup'), 80);
-}, 400);
+  while (true) {
+    try {
+        console.log("New cycle: Clicking New Ship");
+        clickByText("button", "New Ship");
+        await sleep(2000);
+
+        console.log("Cycle: Clicking Launch");
+        clickByText("button", "Launch");
+        await sleep(4000);
+
+        console.log("Cycle: Clicking Exit");
+        const exitBtn = document.querySelector("#exit_button");
+        if (exitBtn) exitBtn.click();
+        
+        await sleep(2000);
+    } catch (e) {
+        console.error("Loop error:", e);
+        await sleep(1000);
+    }
+  }
+})();
 """
 
-# --- DRIVER SETUP (CRASH-SAFE) ---
 def setup_driver():
     logging.info("🚀 Launching Chromium")
-
     opts = Options()
     opts.binary_location = "/usr/bin/chromium"
-
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--mute-audio")
-
-    # prevent throttling
     opts.add_argument("--disable-renderer-backgrounding")
     opts.add_argument("--disable-background-timer-throttling")
-    opts.add_argument("--disable-backgrounding-occluded-windows")
-
-    # crash hardening (IMPORTANT)
-    opts.add_argument("--disable-breakpad")
-    opts.add_argument("--disable-crash-reporter")
-    opts.add_argument("--disable-features=AudioServiceOutOfProcess")
-    opts.add_argument("--disable-features=CalculateNativeWinOcclusion")
-
-    # JS heap limit ONLY
     opts.add_argument("--js-flags=--max-old-space-size=512")
 
     opts.add_experimental_option("prefs", {
@@ -122,34 +116,21 @@ def setup_driver():
         options=opts
     )
 
-    # Inject WASM hook early
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": WASM_HOOK_SCRIPT}
     )
-
     return driver
 
-# --- BOT CORE ---
 def start_bot():
     driver = setup_driver()
-    wait = WebDriverWait(driver, 45)
+    wait = WebDriverWait(driver, 30)
 
     try:
-        logging.info("📍 Navigating to invite")
-        driver.get(SHIP_INVITE_LINK)
+        logging.info(f"📍 Navigating to {TARGET_URL}")
+        driver.get(TARGET_URL)
 
-        # AFTER page load → disable devtools buffers (safe timing)
-        driver.execute_cdp_cmd("Log.disable", {})
-        driver.execute_cdp_cmd("Runtime.disable", {})
-        driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
-
-        accept = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, "//button[contains(@class,'btn-green') and text()='Accept']")
-        ))
-        driver.execute_script("arguments[0].click();", accept)
-        time.sleep(5)
-
+        # 1. Handle Anonymous Login Key
         if ANONYMOUS_LOGIN_KEY:
             try:
                 restore = wait.until(EC.element_to_be_clickable(
@@ -170,27 +151,33 @@ def start_bot():
                     (By.XPATH, "//button[text()='Submit']")
                 ))
                 driver.execute_script("arguments[0].click();", submit)
-                time.sleep(5)
+                time.sleep(3)
+                logging.info("🔑 Login key restored")
             except Exception as e:
-                logging.warning(f"Key restore skipped: {e}")
+                logging.warning(f"Key restore skipped or failed: {e}")
 
+        # 2. Enter the Game Menu
         try:
             play = wait.until(EC.element_to_be_clickable(
                 (By.XPATH, "//button[contains(.,'Play Anonymously')]")
             ))
             driver.execute_script("arguments[0].click();", play)
+            logging.info("🖱️ Clicked Play")
         except:
-            pass
+            logging.info("Play button not found, might already be in menu")
 
-        logging.info("⌨️ Injecting movement")
-        driver.execute_script(JS_MOVEMENT_SCRIPT)
-        logging.info("✅ Bot active")
+        # 3. Inject the user's custom loop
+        time.sleep(5) # Wait for menu to stabilize
+        logging.info("⚙️ Injecting Custom Loop Script")
+        driver.execute_script(JS_LOOP_SCRIPT)
+        
+        logging.info("✅ Bot loop active")
 
-        # STABLE LOOP
+        # Keep Python alive while the JS runs in the browser
         while True:
             time.sleep(60)
-            _ = driver.title
-            logging.info("💓 Heartbeat")
+            _ = driver.title # Check if driver is still alive
+            logging.info("💓 Heartbeat: Bot script is running")
 
     except Exception as e:
         logging.error(f"❌ Crash: {e}")
@@ -218,6 +205,7 @@ def main():
         try:
             start_bot()
         except Exception:
+            logging.info("Restarting bot in 10 seconds...")
             time.sleep(10)
             gc.collect()
 
