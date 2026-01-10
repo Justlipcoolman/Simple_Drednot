@@ -24,7 +24,7 @@ logging.basicConfig(
 TARGET_URL = 'https://drednot.io/'
 ANONYMOUS_LOGIN_KEY = '_M85tFxFxIRDax_nh-HYm1gT'
 
-# --- WASM HOOK (Essential for Drednot Engine) ---
+# --- WASM HOOK ---
 WASM_HOOK_SCRIPT = """
 (function() {
     'use strict';
@@ -42,62 +42,8 @@ WASM_HOOK_SCRIPT = """
             }
         } catch (e) {}
     }
-    win.WebAssembly.instantiate = function(buf, imports) {
-        patch(imports);
-        return origInst.apply(this, arguments);
-    };
-    win.WebAssembly.instantiateStreaming = function(src, imports) {
-        patch(imports);
-        return origStream.apply(this, arguments);
-    };
-})();
-"""
-
-# --- YOUR SHIP-MAKING LOOP ---
-JS_SHIP_LOOP = """
-(async function () {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-  function clickByText(tag, text) {
-    const el = [...document.querySelectorAll(tag)]
-      .find(e => e.textContent.trim().includes(text));
-    if (el) {
-        el.click();
-        return true;
-    }
-    return false;
-  }
-
-  console.log("[Bot] Ship-creation loop started");
-
-  while (true) {
-    try {
-        // 1. Create New Ship
-        console.log("Cycle: Creating New Ship...");
-        clickByText("button", "New Ship");
-        await sleep(2000);
-
-        // 2. Launch the Ship
-        console.log("Cycle: Launching...");
-        clickByText("button", "Launch");
-        await sleep(4000); // Give time for the game to load/spawn
-
-        // 3. Exit immediately (leaving the ship)
-        console.log("Cycle: Exiting ship...");
-        const exitBtn = document.querySelector("#exit_button");
-        if (exitBtn) {
-            exitBtn.click();
-        } else {
-            // Fallback if #exit_button isn't found
-            clickByText("button", "Exit"); 
-        }
-        
-        await sleep(3000); // Wait for return to main menu
-    } catch (e) {
-        console.error("Loop error:", e);
-        await sleep(2000);
-    }
-  }
+    win.WebAssembly.instantiate = function(buf, imports) { patch(imports); return origInst.apply(this, arguments); };
+    win.WebAssembly.instantiateStreaming = function(src, imports) { patch(imports); return origStream.apply(this, arguments); };
 })();
 """
 
@@ -110,101 +56,97 @@ def setup_driver():
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--mute-audio")
+    opts.add_argument("--window-size=1280,720")
     opts.add_argument("--js-flags=--max-old-space-size=512")
 
-    opts.add_experimental_option("prefs", {
-        "profile.managed_default_content_settings.images": 2,
-        "disk-cache-size": 0
-    })
-
-    driver = webdriver.Chrome(
-        service=Service("/usr/bin/chromedriver"),
-        options=opts
-    )
-
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": WASM_HOOK_SCRIPT}
-    )
+    driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": WASM_HOOK_SCRIPT})
     return driver
 
 def start_bot():
     driver = setup_driver()
-    wait = WebDriverWait(driver, 35)
+    wait = WebDriverWait(driver, 20)
 
     try:
-        logging.info(f"📍 Navigating to {TARGET_URL}")
+        logging.info(f"📍 Loading {TARGET_URL}")
         driver.get(TARGET_URL)
-
-        # Handle Anonymous Key Restore
-        if ANONYMOUS_LOGIN_KEY:
-            try:
-                restore_btn = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//a[contains(text(),'Restore old anonymous key')]")
-                ))
-                driver.execute_script("arguments[0].click();", restore_btn)
-
-                key_input = wait.until(EC.visibility_of_element_located(
-                    (By.CSS_SELECTOR, "div.modal-window input")
-                ))
-                key_input.send_keys(ANONYMOUS_LOGIN_KEY)
-                driver.execute_script(
-                    "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", key_input
-                )
-
-                submit = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[text()='Submit']")))
-                driver.execute_script("arguments[0].click();", submit)
-                time.sleep(3)
-                logging.info("🔑 Key restored successfully")
-            except Exception as e:
-                logging.warning(f"Key restore step skipped: {e}")
-
-        # Click Play to enter the menu
-        try:
-            play = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//button[contains(.,'Play Anonymously')]")
-            ))
-            driver.execute_script("arguments[0].click();", play)
-            time.sleep(5)
-        except:
-            pass
-
-        logging.info("⚙️ Injecting Ship Creation Loop")
-        driver.execute_script(JS_SHIP_LOOP)
-        logging.info("✅ Bot active: Making ships and exiting.")
+        time.sleep(5)
 
         while True:
-            time.sleep(60)
-            _ = driver.title # Heartbeat check
-            logging.info("💓 Heartbeat: Bot is still running")
+            # --- STEP 1: LOGIN CHECK ---
+            menu_check = driver.find_elements(By.XPATH, "//button[contains(.,'New Ship')]")
+            
+            if not menu_check:
+                logging.info("🔑 Login required. Restoring key...")
+                try:
+                    restore = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(),'Restore')]")))
+                    driver.execute_script("arguments[0].click();", restore)
+                    
+                    key_input = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.modal-window input")))
+                    key_input.send_keys(ANONYMOUS_LOGIN_KEY)
+                    driver.execute_script("arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", key_input)
+                    
+                    submit = driver.find_element(By.XPATH, "//button[text()='Submit']")
+                    driver.execute_script("arguments[0].click();", submit)
+                    time.sleep(2)
+                    
+                    play = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Play Anonymously')]")))
+                    driver.execute_script("arguments[0].click();", play)
+                    time.sleep(3)
+                except Exception as e:
+                    logging.warning(f"Login flow issue (maybe already in?): {e}")
+
+            # --- STEP 2: CREATE SHIP ---
+            try:
+                logging.info("🚢 Creating ship...")
+                btn_new = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'New Ship')]")))
+                driver.execute_script("arguments[0].click();", btn_new)
+                time.sleep(1)
+
+                btn_launch = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Launch')]")))
+                driver.execute_script("arguments[0].click();", btn_launch)
+                logging.info("🚀 Ship Launched!")
+                
+                # Stay in ship for a few seconds
+                time.sleep(8) 
+
+                # --- STEP 3: EXIT (NO ESC KEY) ---
+                logging.info("🚪 Attempting to Exit Ship (JS Click)...")
+                # Using JS to click even if the button is hidden by the game canvas
+                driver.execute_script("""
+                    const btn = document.querySelector('#exit_button') || 
+                                [...document.querySelectorAll('button')].find(b => b.textContent.includes('Exit'));
+                    if (btn) btn.click();
+                """)
+                
+                logging.info("✅ Exit command sent.")
+                time.sleep(4) # Wait to return to menu
+
+            except Exception as e:
+                logging.warning(f"Loop interrupted: {e}. Refreshing...")
+                driver.refresh()
+                time.sleep(5)
 
     except Exception as e:
-        logging.error(f"❌ Crash: {e}")
+        logging.error(f"🔥 Critical Crash: {e}")
         raise
     finally:
         driver.quit()
 
-# --- FLASK ---
+# --- FLASK SERVER ---
 app = Flask(__name__)
 @app.route("/")
-def health():
-    return "Bot Running"
+def health(): return "Bot Running"
 
 def main():
-    threading.Thread(
-        target=lambda: app.run(
-            host="0.0.0.0",
-            port=int(os.environ.get("PORT", 10000)),
-            use_reloader=False
-        ),
-        daemon=True
-    ).start()
-
+    # Start Flask in background
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=10000, use_reloader=False), daemon=True).start()
+    
+    # Run Bot
     while True:
         try:
             start_bot()
         except Exception:
-            logging.info("Restarting in 10s...")
             time.sleep(10)
             gc.collect()
 
